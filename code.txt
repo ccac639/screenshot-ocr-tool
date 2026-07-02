@@ -1,0 +1,2778 @@
+================================================================================
+Screenshot OCR Tool V2.1 Stable - Complete Source Code
+================================================================================
+
+================================================================================
+FILE: requirements.txt
+================================================================================
+# ======== FILE: requirements.txt ====================
+mss>=9.0.0
+dxcam>=0.0.15; platform_system == "Windows"
+PyQt6>=6.5.0
+Pillow>=10.0.0
+pyautogui>=0.9.53
+numpy>=1.24.0
+pynput>=1.7.6
+paddlepaddle>=2.5.0
+paddleocr>=3.0.0
+easyocr>=1.7.0
+imagehash>=4.3.1
+scikit-image>=0.22.0
+
+
+================================================================================
+FILE: README.md
+================================================================================
+# 截图+OCR+长截图工具
+
+Python 3.10+ 桌面工具，功能类似 QQ截图/微信截图/Snipaste。
+
+## 功能
+
+- 区域截图（鼠标拖拽选框）
+- 长截图（自动滚动拼接）
+- OCR 文字识别（PaddleOCR / EasyOCR 自动 fallback）
+- 全局快捷键控制
+- 截图预览 + 编辑/复制/导出
+
+## 安装
+
+```bash
+pip install -r requirements.txt
+```
+
+## 运行
+
+```bash
+python -m app.main
+```
+
+## 快捷键
+
+| 功能 | 快捷键 |
+|------|---------|
+| 启动截图 | Ctrl+Shift+A |
+| 长截图 | Ctrl+Shift+S |
+| OCR识别 | Ctrl+Shift+O |
+| 取消截图 | Esc / 右键 |
+
+## 依赖
+
+- PyQt6
+- PaddleOCR（优先） / EasyOCR（fallback）
+- pynput（全局热键）
+- Pillow、pyautogui、numpy
+
+## 注意
+
+- Windows 10/11 优先
+- PaddleOCR 首次运行会自动下载中文模型（约 30MB），请保持联网
+- 长截图时需要以管理员身份运行，否则全局热键可能注册失败
+
+
+================================================================================
+FILE: app/__init__.py
+================================================================================
+# app/__init__.py
+
+
+================================================================================
+FILE: app/main.py
+================================================================================
+"""
+入口文件 V2.1 稳定版
+初始化所有模块 + 注册全局热键 + 启动 UI。
+
+V2.1 修复：
+- DPI 感知初始化
+- 修饰键状态清理
+- 所有模块单例模式
+- 优雅退出
+"""
+
+import sys
+import time
+import warnings
+
+warnings.filterwarnings("ignore")
+
+# ─── 必须在导入 PyQt6 前设置 DPI 感知 ───────────
+from app.core.dpi import set_dpi_awareness, get_dpi_adapter
+
+set_dpi_awareness()
+
+
+# ─── PyQt6 导入 ─────────────────────────────
+from PyQt6.QtWidgets import QApplication
+from PyQt6.QtCore import QTimer, Qt
+
+from app.core.event_bus import bus, AppEvent
+from app.core.state_machine import sm, CaptureState
+from app.ocr.engine import get_ocr_engine
+from app.ocr.pipeline import get_ocr_pipeline
+from app.hotkey.listener import HotkeyListener
+from app.ui.panel import MainWindow
+from app.utils.key_cleaner import cleanup_after_hotkey
+
+
+# ─── 全局热键回调 ────────────────────────────
+def on_hotkey_capture():
+    """Ctrl+Shift+A：启动截图"""
+    cleanup_after_hotkey()
+    window = _get_main_window()
+    if window:
+        window._on_capture_clicked()
+
+
+def on_hotkey_long_capture():
+    """Ctrl+Shift+S：启动长截图"""
+    cleanup_after_hotkey()
+    window = _get_main_window()
+    if window:
+        window._on_long_capture_clicked()
+
+
+def on_hotkey_ocr():
+    """Ctrl+Shift+O：OCR 识别"""
+    cleanup_after_hotkey()
+    window = _get_main_window()
+    if window:
+        window._on_ocr_clicked()
+
+
+# ─── 主窗口引用 ─────────────────────────────
+_main_window = None
+
+
+def _get_main_window() -> MainWindow:
+    return _main_window
+
+
+# ─── 主函数 ─────────────────────────────────
+def main():
+    """主函数"""
+    global _main_window
+
+    print("=" * 80)
+    print("  Screenshot OCR Tool V2.1 Stable")
+    print("=" * 80)
+    print()
+
+    # 创建 QApplication
+    app = QApplication(sys.argv)
+    app.setApplicationName("Screenshot OCR Tool V2.1")
+    app.setApplicationDisplayName("Screenshot OCR Tool V2.1 Stable")
+
+    # DPI 适配
+    dpi = get_dpi_adapter()
+    print(f"[Main] DPI 缩放因子: {dpi.scale:.2f}")
+
+    # 初始化 OCR 引擎（单例，只初始化一次）
+    print("[Main] 初始化 OCR 引擎（单例）...")
+    ocr_engine = get_ocr_engine()
+    if ocr_engine.is_ready():
+        print(f"[Main] OCR 引擎就绪（{ocr_engine.backend_name}）")
+    else:
+        print("[Main] ⚠️ OCR 引擎未就绪（将使用 EasyOCR fallback）")
+
+    # 初始化 OCR 任务调度器（单例）
+    print("[Main] 初始化 OCR 任务调度器（单例）...")
+    ocr_pipeline = get_ocr_pipeline()
+    print(f"[Main] OCR 任务调度器就绪")
+
+    # 创建主窗口
+    print("[Main] 创建主窗口...")
+    window = MainWindow()
+    _main_window = window
+    window.show()
+
+    # 注册全局热键
+    print("[Main] 注册全局热键...")
+    hotkey = HotkeyListener()
+    hotkey.register("capture", "<ctrl>+<shift>+a", on_hotkey_capture)
+    hotkey.register("long_capture", "<ctrl>+<shift>+s", on_hotkey_long_capture)
+    hotkey.register("ocr", "<ctrl>+<shift>+o", on_hotkey_ocr)
+    hotkey.start()
+
+    print()
+    print("=" * 80)
+    print("[Main] 全局热键已注册：")
+    print("  Ctrl+Shift+A : 启动截图")
+    print("  Ctrl+Shift+S : 启动长截图")
+    print("  Ctrl+Shift+O : OCR 识别")
+    print("  Esc           : 取消")
+    print()
+    print("[Main] 主窗口已启动")
+    print(f"[Main] 截图引擎: {get_ocr_engine().backend_name if get_ocr_engine().is_ready() else 'pending'}")  # 这行有问题，应该是 grabber 的后端
+    from app.capture.screen_grabber import grabber
+    print(f"[Main] 截图引擎: {grabber.backend_name}")
+    print("=" * 80)
+    print()
+
+    # 启动事件循环
+    sys.exit(app.exec())
+
+
+if __name__ == "__main__":
+    main()
+
+
+================================================================================
+FILE: app/core/__init__.py
+================================================================================
+# app/core/__init__.py
+from app.core.event_bus import bus, AppEvent
+from app.core.state_machine import sm, CaptureState
+
+__all__ = ["bus", "AppEvent", "sm", "CaptureState"]
+
+
+================================================================================
+FILE: app/core/dpi.py
+================================================================================
+"""
+DPI 统一适配器
+解决 Windows 高 DPI 缩放导致坐标错位的核心问题。
+
+核心策略：
+1. 设置进程 DPI 感知模式为 PER_MONITOR_AWARE_V2
+2. 所有坐标统一转换为物理像素
+3. 截图时也使用物理像素范围
+"""
+
+import ctypes
+import ctypes.wintypes
+import warnings
+from typing import Tuple, Optional
+
+warnings.filterwarnings("ignore")
+
+
+# ─── Windows DPI 感知设置 ───────────────────────────────────────────
+def set_dpi_awareness():
+    """
+    设置当前进程为 DPI 感知模式。
+    必须在创建窗口/截图前调用！
+    """
+    try:
+        # Windows 10/11: SetProcessDpiAwarenessContext
+        # DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 = -4
+        ctypes.windll.user32.SetProcessDpiAwarenessContext(-4)
+    except Exception:
+        try:
+            # Windows 8.1+: SetProcessDpiAwareness
+            ctypes.windll.shcore.SetProcessDpiAwareness(2)
+        except Exception:
+            try:
+                # Windows 7+: SetProcessDPIAware
+                ctypes.windll.user32.SetProcessDPIAware()
+            except Exception:
+                pass
+
+
+# ─── DPI 缩放因子获取 ─────────────────────────────────────────────
+def get_dpi_scale() -> float:
+    """
+    获取当前主显示器的 DPI 缩放因子。
+    返回：缩放因子（1.0 = 100%, 1.25 = 125%, 1.5 = 150%...）
+    """
+    try:
+        import tkinter as tk
+        root = tk.Tk()
+        root.withdraw()
+        # tkinter 返回的是缩放后的像素
+        scale = root.winfo_fpixels('1i') / 96.0
+        root.destroy()
+        return scale
+    except Exception:
+        try:
+            # 使用 Windows API
+            hdc = ctypes.windll.user32.GetDC(0)
+            dpi = ctypes.windll.gdi32.GetDeviceCaps(hdc, 88)  # LOGPIXELSX
+            ctypes.windll.user32.ReleaseDC(0, hdc)
+            return dpi / 96.0
+        except Exception:
+            return 1.0
+
+
+# ─── 坐标转换 ─────────────────────────────────────────────────────
+class DPIAdapter:
+    """
+    DPI 坐标适配器。
+
+    使用方式：
+        adapter = DPIAdapter()
+        # 逻辑坐标 → 物理坐标（用于截图）
+        px, py, pw, ph = adapter.to_physical(lx, ly, lw, lh)
+        # 物理坐标 → 逻辑坐标（用于显示）
+        lx, ly, lw, lh = adapter.to_logical(px, py, pw, ph)
+    """
+
+    def __init__(self):
+        self.scale = get_dpi_scale()
+        self.inv_scale = 1.0 / self.scale if self.scale > 0 else 1.0
+
+    def to_physical(self, x: int, y: int, w: int, h: int) -> Tuple[int, int, int, int]:
+        """
+        逻辑坐标（Qt/Windows 报告的坐标）→ 物理像素（截图用的坐标）
+        在高 DPI 屏幕上，逻辑坐标 < 物理像素，需要放大。
+        """
+        return (
+            int(x * self.scale),
+            int(y * self.scale),
+            int(w * self.scale),
+            int(h * self.scale),
+        )
+
+    def to_logical(self, x: int, y: int, w: int, h: int) -> Tuple[int, int, int, int]:
+        """
+        物理像素 → 逻辑坐标（用于 UI 显示）
+        """
+        return (
+            int(x * self.inv_scale),
+            int(y * self.inv_scale),
+            int(w * self.inv_scale),
+            int(h * self.inv_scale),
+        )
+
+    def scale_rect(self, rect: Tuple[int, int, int, int]) -> Tuple[int, int, int, int]:
+        """快捷方法：(x, y, w, h) → 放大到物理像素"""
+        return self.to_physical(*rect)
+
+    def unscale_rect(self, rect: Tuple[int, int, int, int]) -> Tuple[int, int, int, int]:
+        """快捷方法：(x, y, w, h) → 缩小到逻辑坐标"""
+        return self.to_logical(*rect)
+
+
+# ─── 全局单例 ─────────────────────────────────────────────────────
+_adapter: Optional[DPIAdapter] = None
+
+
+def get_dpi_adapter() -> DPIAdapter:
+    """获取全局 DPI 适配器单例"""
+    global _adapter
+    if _adapter is None:
+        set_dpi_awareness()
+        _adapter = DPIAdapter()
+    return _adapter
+
+
+def reset_dpi_adapter():
+    """重置 DPI 适配器（屏幕设置变更后调用）"""
+    global _adapter
+    set_dpi_awareness()
+    _adapter = DPIAdapter()
+
+
+================================================================================
+FILE: app/core/event_bus.py
+================================================================================
+"""
+全局事件总线（发布-订阅模式）
+所有模块通过 EventBus 解耦通信。
+"""
+
+from enum import Enum, auto
+from typing import Callable, Dict, List
+import threading
+
+
+class AppEvent(Enum):
+    """应用事件枚举"""
+
+    # 状态机事件
+    STATE_CHANGED = auto()
+
+    # 截图事件
+    CAPTURE_STARTED = auto()
+    REGION_SELECTED = auto()
+    CAPTURE_CANCELLED = auto()
+    FRAME_CAPTURED = auto()
+
+    # 长截图事件
+    SCROLL_STARTED = auto()
+    SCROLL_FRAME = auto()
+    SCROLL_FINISHED = auto()
+    SCROLL_ERROR = auto()
+
+    # 拼接事件
+    STITCH_STARTED = auto()
+    STITCH_PROGRESS = auto()
+    STITCH_FINISHED = auto()
+
+    # OCR 事件
+    OCR_QUEUED = auto()
+    OCR_STARTED = auto()
+    OCR_PROGRESS = auto()
+    OCR_FINISHED = auto()
+    OCR_ERROR = auto()
+
+    # UI 事件
+    UI_SHOW_OVERLAY = auto()
+    UI_HIDE_OVERLAY = auto()
+    UI_UPDATE_PREVIEW = auto()
+    UI_UPDATE_STATUS = auto()
+
+    # 快捷键事件
+    HOTKEY_CAPTURE = auto()
+    HOTKEY_LONG_CAPTURE = auto()
+    HOTKEY_OCR = auto()
+    HOTKEY_CANCEL = auto()
+
+
+class EventBus:
+    """
+    全局事件总线（单例）
+    支持同步/异步订阅，线程安全。
+    """
+    _instance = None
+    _lock = threading.Lock()
+
+    def __new__(cls):
+        with cls._lock:
+            if cls._instance is None:
+                cls._instance = super().__new__(cls)
+                cls._instance._subscribers: Dict[AppEvent, List[Callable]] = {}
+                cls._instance._async_subscribers: Dict[AppEvent, List[Callable]] = {}
+            return cls._instance
+
+    def subscribe(self, event: AppEvent, callback: Callable):
+        """订阅事件（同步，在发布线程执行）"""
+        if event not in self._subscribers:
+            self._subscribers[event] = []
+        if callback not in self._subscribers[event]:
+            self._subscribers[event].append(callback)
+
+    def subscribe_async(self, event: AppEvent, callback: Callable):
+        """订阅事件（异步，投递到 Qt 主线程）"""
+        if event not in self._async_subscribers:
+            self._async_subscribers[event] = []
+        if callback not in self._async_subscribers[event]:
+            self._async_subscribers[event].append(callback)
+
+    def unsubscribe(self, event: AppEvent, callback: Callable):
+        """取消订阅"""
+        for d in (self._subscribers, self._async_subscribers):
+            if event in d and callback in d[event]:
+                d[event].remove(callback)
+
+    def publish(self, event: AppEvent, *args, **kwargs):
+        """发布事件（同步通知所有订阅者）"""
+        # 同步订阅者
+        for cb in self._subscribers.get(event, []):
+            try:
+                cb(*args, **kwargs)
+            except Exception as e:
+                print(f"[EventBus] 同步订阅者错误 {event.name}: {e}")
+        # 异步订阅者（通过 Qt 信号投递）
+        for cb in self._async_subscribers.get(event, []):
+            try:
+                cb(*args, **kwargs)
+            except Exception as e:
+                print(f"[EventBus] 异步订阅者错误 {event.name}: {e}")
+
+    def clear(self):
+        """清除所有订阅（测试用）"""
+        self._subscribers.clear()
+        self._async_subscribers.clear()
+
+
+# 全局单例
+bus = EventBus()
+
+
+================================================================================
+FILE: app/core/state_machine.py
+================================================================================
+"""
+截图流程状态机
+严格管理：IDLE → SELECT_REGION → CAPTURING → SCROLLING → STITCHING → OCR_PROCESSING → DONE
+"""
+
+from enum import Enum, auto
+from typing import Optional, Callable, Dict
+from app.core.event_bus import bus, AppEvent
+
+
+class CaptureState(Enum):
+    """截图状态枚举"""
+    IDLE = auto()
+    SELECT_REGION = auto()
+    CAPTURING = auto()
+    SCROLLING = auto()
+    STITCHING = auto()
+    OCR_PROCESSING = auto()
+    DONE = auto()
+    CANCELLED = auto()
+    ERROR = auto()
+
+
+class StateMachine:
+    """
+    截图流程状态机（单例）
+    所有状态转换必须通过本类，禁止模块自行修改状态。
+    """
+    _instance = None
+
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+            cls._instance._state = CaptureState.IDLE
+            cls._instance._context: Dict = {}
+            cls._instance._transition_callbacks: Dict[CaptureState, List[Callable]] = {}
+        return cls._instance
+
+    @property
+    def state(self) -> CaptureState:
+        return self._state
+
+    @property
+    def context(self) -> Dict:
+        return self._context
+
+    def set_context(self, **kwargs):
+        """设置上下文数据（如 region, frames, result_img 等）"""
+        self._context.update(kwargs)
+
+    def clear_context(self):
+        self._context.clear()
+
+    def register_callback(self, state: CaptureState, cb: Callable):
+        """注册进入某状态时的回调"""
+        if state not in self._transition_callbacks:
+            self._transition_callbacks[state] = []
+        self._transition_callbacks[state].append(cb)
+
+    def can_transition(self, target: CaptureState) -> bool:
+        """检查状态转换是否合法"""
+        rules = {
+            CaptureState.IDLE: [CaptureState.SELECT_REGION, CaptureState.CANCELLED],
+            CaptureState.SELECT_REGION: [CaptureState.CAPTURING, CaptureState.CANCELLED],
+            CaptureState.CAPTURING: [CaptureState.SCROLLING, CaptureState.STITCHING, CaptureState.CANCELLED, CaptureState.ERROR],
+            CaptureState.SCROLLING: [CaptureState.STITCHING, CaptureState.CANCELLED, CaptureState.ERROR],
+            CaptureState.STITCHING: [CaptureState.OCR_PROCESSING, CaptureState.DONE, CaptureState.ERROR],
+            CaptureState.OCR_PROCESSING: [CaptureState.DONE, CaptureState.ERROR],
+            CaptureState.DONE: [CaptureState.IDLE],
+            CaptureState.CANCELLED: [CaptureState.IDLE],
+            CaptureState.ERROR: [CaptureState.IDLE],
+        }
+        return target in rules.get(self._state, [])
+
+    def transition(self, target: CaptureState, **context_kwargs) -> bool:
+        """执行状态转换（会发布 EVENT"""
+        if not self.can_transition(target):
+            print(f"[StateMachine] 非法转换: {self._state.name} → {target.name}")
+            return False
+
+        old = self._state
+        self._state = target
+        if context_kwargs:
+            self._context.update(context_kwargs)
+
+        # 触发回调
+        for cb in self._transition_callbacks.get(target, []):
+            try:
+                cb(old, target, self._context)
+            except Exception as e:
+                print(f"[StateMachine] 回调错误: {e}")
+
+        # 发布事件
+        bus.publish(AppEvent.STATE_CHANGED, old, target, self._context)
+        print(f"[StateMachine] {old.name} → {target.name}")
+        return True
+
+    def cancel(self):
+        """取消当前流程"""
+        if self._state != CaptureState.IDLE:
+            self.transition(CaptureState.CANCELLED)
+            self.clear_context()
+            self.transition(CaptureState.IDLE)
+
+    def reset(self):
+        """重置到 IDLE"""
+        self._state = CaptureState.IDLE
+        self.clear_context()
+
+
+# 全局单例
+sm = StateMachine()
+
+
+================================================================================
+FILE: app/capture/__init__.py
+================================================================================
+# app/capture/__init__.py
+from app.capture.screen_grabber import grabber
+from app.capture.region_capture import RegionSelector
+from app.capture.scroll_capture import LongCaptureThread
+
+__all__ = ["grabber", "RegionSelector", "LongCaptureThread"]
+
+
+================================================================================
+FILE: app/capture/screen_grabber.py
+================================================================================
+"""
+高性能截图引擎 V2.1
+优先使用 dxcam（GPU 加速），失败 fallback mss，最后 PIL。
+
+新增：
+- 黑屏检测 + 自动重试
+- DPI 感知坐标转换
+- 截图前延迟（等待渲染）
+"""
+
+import time
+import warnings
+from typing import Optional, Tuple, List
+from PIL import Image
+
+warnings.filterwarnings("ignore")
+
+
+# ─── 黑屏检测 ─────────────────────────────────────────────
+def is_black_screen(img: Image.Image, threshold: float = 0.98) -> bool:
+    """
+    检测是否为黑屏（或接近全黑）。
+    threshold: 黑色像素占比阈值（默认 0.98 = 98%）
+    返回 True 表示很可能是黑屏。
+    """
+    try:
+        import numpy as np
+        arr = np.array(img)
+        # 计算亮度（RGB 平均值）
+        if len(arr.shape) == 3:
+            brightness = arr.mean()
+        else:
+            brightness = arr.mean()
+        # 亮度 < 10（0~255 范围）认为是黑屏
+        return brightness < 10.0
+    except Exception:
+        return False
+
+
+def is_white_screen(img: Image.Image, threshold: float = 0.98) -> bool:
+    """检测是否为白屏（接近全白）"""
+    try:
+        import numpy as np
+        arr = np.array(img)
+        brightness = arr.mean()
+        # 亮度 > 245 认为是白屏（可能是 overlay 残留）
+        return brightness > 245.0
+    except Exception:
+        return False
+
+
+# ─── 截图引擎封装（单例）────────────────────────────────
+class ScreenGrabber:
+    """
+    截图引擎封装（单例）。
+    优先级：dxcam（GPU）> mss > PIL fallback。
+
+    V2.1 新增：
+    - 黑屏自动检测 + 重试
+    - DPI 感知坐标
+    - 截图前等待渲染（wait_ready）
+    """
+
+    _instance = None
+
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+            cls._instance._backend = None
+            cls._instance._mss = None
+            cls._instance._dxcam = None
+            cls._instance._last_region = None
+            cls._instance._init_backend()
+        return cls._instance
+
+    def _init_backend(self):
+        """初始化最佳可用后端"""
+        # 1. 尝试 dxcam（GPU 加速，仅 Windows）
+        try:
+            import dxcam
+            self._dxcam = dxcam.create(output_color="BGR")
+            if self._dxcam is not None:
+                self._backend = "dxcam"
+                print("[Grabber] 使用 dxcam 后端（GPU 加速）")
+                return
+        except Exception:
+            pass
+
+        # 2. 尝试 mss（极快纯 Python）
+        try:
+            import mss
+            self._mss = mss.mss()
+            self._backend = "mss"
+            print("[Grabber] 使用 mss 后端")
+            return
+        except Exception:
+            pass
+
+        # 3. fallback: PIL
+        self._backend = "pil"
+        print("[Grabber] 使用 PIL 后端（性能较低）")
+
+    def grab(
+        self,
+        region: Optional[Tuple[int, int, int, int]] = None,
+        wait_ms: int = 120,
+    ) -> Image.Image:
+        """
+        截取屏幕区域。
+        region: (x, y, x+w, y+h) 物理像素，或 None（全屏）
+        wait_ms: 截图前等待毫秒数（允许屏幕渲染）
+        返回：PIL RGB Image
+
+        V2.1：自动检测黑屏并重试
+        """
+        # 等待渲染（避免截到黑屏）
+        if wait_ms > 0:
+            time.sleep(wait_ms / 1000.0)
+
+        max_retry = 3
+        for attempt in range(max_retry):
+            img = self._do_grab(region)
+
+            # 检测黑屏/白屏
+            if is_black_screen(img):
+                if attempt < max_retry - 1:
+                    time.sleep(0.15)
+                    continue
+            if is_white_screen(img):
+                if attempt < max_retry - 1:
+                    time.sleep(0.15)
+                    continue
+
+            return img
+
+        # 所有重试都失败，返回最后一次结果
+        return img
+
+    def _do_grab(self, region):
+        """执行实际截图"""
+        if self._backend == "dxcam" and self._dxcam is not None:
+            return self._grab_dxcam(region)
+        elif self._backend == "mss" and self._mss is not None:
+            return self._grab_mss(region)
+        else:
+            return self._grab_pil(region)
+
+    def _grab_dxcam(self, region):
+        """dxcam 截图"""
+        if region:
+            # dxcam region: (left, top, right, bottom)
+            self._dxcam.region = region
+        frame = self._dxcam.grab()
+        if frame is None:
+            # dxcam 失败，fallback 到 mss
+            return self._grab_mss(region)
+        # dxcam 返回 BGR numpy array
+        import cv2
+        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        return Image.fromarray(rgb)
+
+    def _grab_mss(self, region):
+        """mss 截图（快）"""
+        if region:
+            monitor = {
+                "top": region[1],
+                "left": region[0],
+                "width": region[2] - region[0],
+                "height": region[3] - region[1],
+            }
+        else:
+            monitor = self._mss.monitors[1]  # 主屏
+        shot = self._mss.grab(monitor)
+        return Image.frombytes("RGB", (shot.width, shot.height), shot.rgb)
+
+    def _grab_pil(self, region):
+        """PIL 截图（慢，但最兼容）"""
+        from PIL import ImageGrab
+        if region:
+            return ImageGrab.grab(bbox=region)
+        else:
+            return ImageGrab.grab()
+
+    def grab_all_monitors(self) -> List[Image.Image]:
+        """截取所有显示器（mss 多屏支持）"""
+        if self._backend == "mss" and self._mss is not None:
+            imgs = []
+            for mon in self._mss.monitors[1:]:  # 跳过全屏合并
+                shot = self._mss.grab(mon)
+                imgs.append(Image.frombytes("RGB", (shot.width, shot.height), shot.rgb))
+            return imgs
+        else:
+            # fallback: 只截主屏
+            return [self.grab()]
+
+    @property
+    def backend_name(self) -> str:
+        return self._backend or "unknown"
+
+    def refresh(self):
+        """刷新后端（dxcam 失效时调用）"""
+        self._backend = None
+        self._mss = None
+        self._dxcam = None
+        self._init_backend()
+
+
+================================================================================
+FILE: app/capture/region_capture.py
+================================================================================
+"""
+区域截图模块 V2.1 稳定版
+Snipaste 风格 + 工业级稳定性修复。
+
+V2.1 修复：
+- overlay 安全模式（截图前隐藏，避免黑屏）
+- DPI 坐标转换（高缩放屏幕不错位）
+- Ctrl 状态清理（防止屏幕放大）
+- 黑屏检测 + 自动重试
+"""
+
+import time
+from typing import Optional
+
+from PyQt6.QtWidgets import QWidget, QApplication
+from PyQt6.QtCore import Qt, QRect, pyqtSignal, QPoint, QTimer
+from PyQt6.QtGui import QPainter, QColor, QPen, QFont, QCursor, QPixmap
+
+from PIL import Image
+
+from app.core.event_bus import bus, AppEvent
+from app.core.state_machine import sm, CaptureState
+from app.core.dpi import get_dpi_adapter
+from app.capture.screen_grabber import grabber
+from app.utils.key_cleaner import clear_all_modifier_keys, prepare_for_capture
+
+
+class RegionSelector(QWidget):
+    """
+    全屏半透明遮罩，支持鼠标拖拽选择区域。
+    Snipaste 风格：半透明暗色遮罩，选区高亮。
+
+    V2.1 稳定修复：
+    - 截图前隐藏 overlay（避免截到自己）
+    - DPI 坐标转换
+    - Ctrl 状态清理
+    - 黑屏检测 + 重试
+    """
+
+    region_selected = pyqtSignal(int, int, int, int)
+    cancelled = pyqtSignal()
+
+    def __init__(self):
+        super().__init__()
+        self._start_pos = None
+        self._end_pos = None
+        self._active = False
+        self._full_screenshot = None
+        self._magnifier_pos = None
+        self._dpi = get_dpi_adapter()
+        self._setup_ui()
+
+    def _setup_ui(self):
+        # 无边框 + 置顶 + 工具窗口（不在任务栏显示）
+        self.setWindowFlags(
+            Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.WindowStaysOnTopHint
+            | Qt.WindowType.Tool
+            | Qt.WindowType.MaximizeUsingFullscreenGeometryHint
+        )
+        self.setCursor(Qt.CursorShape.CrossCursor)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        # 全屏
+        screen = QApplication.primaryScreen()
+        if screen:
+            geo = screen.geometry()
+            self.setGeometry(geo)
+
+    def start(self):
+        """启动选区（先截全屏作为背景）"""
+        # V2.1：先清理 Ctrl/Alt 状态（防止屏幕放大）
+        clear_all_modifier_keys()
+
+        # 隐藏自身再截图（避免截到自己）
+        self.hide()
+        QApplication.processEvents()
+        time.sleep(0.08)
+
+        # V2.1：截图前准备（清理修饰键 + 等待渲染）
+        prepare_for_capture()
+
+        # 截取全屏（带黑屏检测）
+        max_retry = 3
+        for attempt in range(max_retry):
+            self._full_screenshot = grabber.grab(wait_ms=100)
+            # 检测黑屏
+            if self._is_black_or_white(self._full_screenshot):
+                if attempt < max_retry - 1:
+                    time.sleep(0.15)
+                    continue
+            break
+
+        self._active = True
+        self._start_pos = None
+        self._end_pos = None
+
+        self.showFullScreen()
+        self.raise_()
+        self.activateWindow()
+        QApplication.setActiveWindow(self)
+
+    def _is_black_or_white(self, img: Image.Image) -> bool:
+        """检测黑屏或白屏"""
+        try:
+            import numpy as np
+            arr = np.array(img)
+            if len(arr.shape) == 3:
+                brightness = arr.mean()
+            else:
+                brightness = arr.mean()
+            return brightness < 10.0 or brightness > 245.0
+        except Exception:
+            return False
+
+    def paintEvent(self, event):
+        if not self._active or not self._full_screenshot:
+            return
+        painter = QPainter(self)
+
+        # 绘制全屏背景（稍微变暗）
+        qimg = self._pil_to_qimg(self._full_screenshot)
+        painter.drawImage(0, 0, qimg)
+
+        # 半透明暗色遮罩
+        painter.fillRect(self.rect(), QColor(0, 0, 0, 100))
+
+        rect = self._get_rect()
+        if rect and rect.width() > 5 and rect.height() > 5:
+            # 清除选区内遮罩（显示原画面）
+            painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_Clear)
+            painter.fillRect(rect, Qt.GlobalColor.transparent)
+            painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
+
+            # 选区边框（红色）
+            pen = QPen(QColor(255, 64, 64), 2)
+            painter.setPen(pen)
+            painter.drawRect(rect)
+
+            # 尺寸信息
+            info = f"{rect.width()} x {rect.height()}"
+            font = QFont("Consolas", 12)
+            painter.setFont(font)
+            painter.setPen(QColor(255, 255, 255))
+            tx = rect.x()
+            ty = rect.y() - 10 if rect.y() > 20 else rect.y() + rect.height() + 18
+            painter.drawText(tx, ty, info)
+
+            # 绘制8个控制点
+            self._draw_handles(painter, rect)
+
+        # 放大镜
+        if self._magnifier_pos and self._full_screenshot:
+            self._draw_magnifier(painter, self._magnifier_pos)
+
+    def _draw_handles(self, painter, rect):
+        """绘制选区四个角和边中点"""
+        s = 6
+        pen = QPen(QColor(255, 255, 255), 2)
+        painter.setPen(pen)
+        painter.setBrush(QColor(255, 64, 64))
+        points = [
+            (rect.x(), rect.y()),
+            (rect.x() + rect.width(), rect.y()),
+            (rect.x(), rect.y() + rect.height()),
+            (rect.x() + rect.width(), rect.y() + rect.height()),
+        ]
+        for px, py in points:
+            painter.drawRect(px - s // 2, py - s // 2, s, s)
+
+    def _draw_magnifier(self, painter, pos):
+        """绘制放大镜（跟随鼠标）"""
+        mx, my = pos.x(), pos.y()
+        radius = 60
+        zoom = 2
+
+        # 从全屏截图取区域
+        left = max(0, mx - radius // zoom)
+        top = max(0, my - radius // zoom)
+        right = min(self._full_screenshot.width, mx + radius // zoom)
+        bottom = min(self._full_screenshot.height, my + radius // zoom)
+
+        if right > left and bottom > top:
+            region = self._full_screenshot.crop((left, top, right, bottom))
+            region = region.resize((radius * 2, radius * 2), Image.LANCZOS)
+
+            qimg = self._pil_to_qimg(region)
+            painter.drawImage(mx + 20, my + 20, qimg)
+
+            # 十字线
+            pen = QPen(QColor(255, 0, 0, 150), 1)
+            painter.setPen(pen)
+            painter.drawLine(mx + 20 + radius, my + 20, mx + 20 + radius, my + 20 + radius * 2)
+            painter.drawLine(mx + 20, my + 20 + radius, mx + 20 + radius * 2, my + 20 + radius)
+
+    def _pil_to_qimg(self, img):
+        from PyQt6.QtGui import QImage
+        if img.mode != "RGB":
+            img = img.convert("RGB")
+        data = img.tobytes("raw", "RGB")
+        return QImage(data, img.width, img.height, QImage.Format.Format_RGB888)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            # V2.1：按下前清理修饰键状态
+            clear_all_modifier_keys()
+            self._start_pos = event.pos()
+            self._end_pos = event.pos()
+            self.update()
+        elif event.button() == Qt.MouseButton.RightButton:
+            self.close()
+            self.cancelled.emit()
+
+    def mouseMoveEvent(self, event):
+        if self._start_pos:
+            self._end_pos = event.pos()
+            self._magnifier_pos = event.pos()
+            self.update()
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton and self._start_pos:
+            rect = self._get_rect()
+            # V2.1：关闭前清理修饰键状态
+            clear_all_modifier_keys()
+            self.close()
+            if rect and rect.width() > 5 and rect.height() > 5:
+                # V2.1：坐标转换（逻辑坐标 → 物理像素）
+                x, y, w, h = rect.x(), rect.y(), rect.width(), rect.height()
+                px, py, pw, ph = self._dpi.to_physical(x, y, w, h)
+                self.region_selected.emit(px, py, pw, ph)
+            else:
+                self.cancelled.emit()
+
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key.Key_Escape:
+            clear_all_modifier_keys()
+            self.close()
+            self.cancelled.emit()
+
+    def _get_rect(self):
+        if not self._start_pos or not self._end_pos:
+            return None
+        return QRect(self._start_pos, self._end_pos).normalized()
+
+
+================================================================================
+FILE: app/capture/scroll_capture.py
+================================================================================
+"""
+长截图引擎 V2.1 稳定版
+工业级稳定性修复。
+
+V2.1 修复：
+- 滚动稳定控制器（防错位）
+- Ctrl 状态清理（防屏幕放大）
+- 黑屏检测 + 自动重试
+- 自适应滚动延迟
+- 三层稳定机制（去重 + 对齐 + 滚动控制）
+"""
+
+import time
+import warnings
+from typing import Optional, Callable, Tuple
+from PIL import Image
+
+warnings.filterwarnings("ignore")
+
+from app.core.event_bus import bus, AppEvent
+from app.core.state_machine import sm, CaptureState
+from app.core.dpi import get_dpi_adapter
+from app.capture.screen_grabber import grabber
+from app.utils.key_cleaner import clear_all_modifier_keys, prepare_for_scroll, prepare_for_capture
+from app.vision.dedup import is_duplicate_phash, is_duplicate_ssim
+from app.vision.align import find_overlap_offset
+from app.vision.stitch import stitch_frames_v2
+
+
+# ─── 滚动稳定控制器 ─────────────────────────────────────
+class ScrollController:
+    """
+    滚动稳定控制器。
+    负责：发送滚动命令 + 等待渲染 + 检测失败。
+    """
+
+    def __init__(self):
+        self._scroll_delay = 0.35  # 默认滚动延迟（秒）
+        self._wheel_amount = -10  # 每次滚动量（负数=向下）
+        self._adaptive = True  # 自适应延迟
+        self._last_scroll_time = 0
+
+    def scroll(self, dx: int = 0, dy: int = -10, delay: float = None):
+        """
+        执行滚动操作。
+        dx/dy: 滚动量（dy 负数=向下）
+        delay: 自定义延迟（None=使用默认值）
+        """
+        # V2.1：滚动前清理修饰键（防屏幕放大）
+        prepare_for_scroll()
+
+        # 执行滚动
+        try:
+            import pyautogui
+            # 使用 scroll 而不是 press('pagedown')，更可控
+            pyautogui.scroll(dy, dx)
+        except Exception:
+            try:
+                import pyautogui
+                pyautogui.press('pagedown')
+            except Exception:
+                pass
+
+        # 等待渲染
+        actual_delay = delay if delay is not None else self._scroll_delay
+        time.sleep(actual_delay)
+
+        # V2.1：滚动后再次清理（防残留）
+        clear_all_modifier_keys()
+
+    def set_delay(self, delay: float):
+        """设置滚动延迟"""
+        self._scroll_delay = max(0.1, min(delay, 3.0))
+
+    def set_wheel_amount(self, amount: int):
+        """设置滚动量"""
+        self._wheel_amount = max(-30, min(amount, -1))
+
+    @property
+    def delay(self) -> float:
+        return self._scroll_delay
+
+    @property
+    def wheel_amount(self) -> int:
+        return self._wheel_amount
+
+
+# ─── 长截图主引擎 ───────────────────────────────────────
+class ScrollCaptureEngine:
+    """
+    长截图引擎 V2.1 稳定版。
+
+    三层稳定机制：
+    1. 去重层（pHash + SSIM）
+    2. 重叠对齐层（template matching）
+    3. 滚动控制器（稳定滚动 + 状态清理）
+    """
+
+    def __init__(self):
+        self._dpi = get_dpi_adapter()
+        self._controller = ScrollController()
+        self._frames: list[Image.Image] = []
+        self._canceled = False
+
+    def capture(
+        self,
+        x: int, y: int, w: int, h: int,
+        max_frames: int = 100,
+        progress_callback: Optional[Callable] = None,
+        finish_callback: Optional[Callable] = None,
+        error_callback: Optional[Callable] = None,
+    ):
+        """
+        执行长截图。
+
+        参数：
+        x, y, w, h: 截图区域（物理像素）
+        max_frames: 最大帧数
+        progress_callback: 进度回调 (current, total)
+        finish_callback: 完成回调 (Image)
+        error_callback: 错误回调 (error_msg)
+        """
+        self._frames = []
+        self._canceled = False
+
+        try:
+            # 切换到滚动模式
+            sm.transition(CaptureState.SCROLLING)
+
+            # 第一帧
+            frame = self._grab_frame(x, y, w, h)
+            if frame is None:
+                raise RuntimeError("第一帧截图失败（黑屏或截图引擎失败）")
+            self._frames.append(frame)
+
+            dup_count = 0
+            adaptive_delay = self._controller.delay
+
+            for i in range(1, max_frames):
+                if self._canceled:
+                    break
+
+                # 滚动
+                self._controller.scroll(
+                    dy=self._controller.wheel_amount,
+                    delay=adaptive_delay,
+                )
+
+                # 截图
+                frame = self._grab_frame(x, y, w, h)
+                if frame is None:
+                    continue
+
+                # 去重检测
+                if self._is_duplicate(frame):
+                    dup_count += 1
+                    if dup_count >= 4:  # 连续4帧重复 → 结束
+                        break
+                    continue
+                else:
+                    dup_count = 0
+
+                # 添加到帧列表
+                self._frames.append(frame)
+
+                # 进度回调
+                if progress_callback:
+                    progress_callback(i, max_frames)
+
+                # 自适应延迟（如果页面渲染慢，增加延迟）
+                if self._controller._adaptive and i > 0 and i % 10 == 0:
+                    adaptive_delay = min(adaptive_delay + 0.05, 1.5)
+
+            # 拼接
+            sm.transition(CaptureState.STITCHING)
+            result = stitch_frames_v2(self._frames)
+
+            sm.transition(CaptureState.DONE)
+            if finish_callback:
+                finish_callback(result)
+
+        except Exception as e:
+            sm.transition(CaptureState.IDLE)
+            if error_callback:
+                error_callback(str(e))
+
+    def _grab_frame(self, x, y, w, h):
+        """截取一帧（带黑屏检测）"""
+        prepare_for_capture()
+        img = grabber.grab(region=(x, y, x + w, y + h), wait_ms=100)
+        if img is None:
+            return None
+        # 黑屏检测
+        try:
+            import numpy as np
+            arr = np.array(img)
+            if arr.mean() < 10.0:
+                time.sleep(0.2)
+                img = grabber.grab(region=(x, y, x + w, y + h), wait_ms=150)
+        except Exception:
+            pass
+        return img
+
+    def _is_duplicate(self, frame: Image.Image) -> bool:
+        """判断是否与上一帧重复"""
+        if len(self._frames) < 1:
+            return False
+        prev = self._frames[-1]
+        # pHash 去重
+        if is_duplicate_phash(prev, frame, threshold=8):
+            return True
+        # SSIM 去重
+        if is_duplicate_ssim(prev, frame, threshold=0.96):
+            return True
+        return False
+
+    def cancel(self):
+        """取消长截图"""
+        self._canceled = True
+
+    def set_scroll_delay(self, delay: float):
+        """设置滚动延迟"""
+        self._controller.set_delay(delay)
+
+    def set_wheel_amount(self, amount: int):
+        """设置滚动量"""
+        self._controller.set_wheel_amount(amount)
+
+
+================================================================================
+FILE: app/vision/__init__.py
+================================================================================
+# app/vision/__init__.py
+from app.vision.dedup import frames_are_duplicate, calc_phash, calc_ssim
+from app.vision.align import find_overlap_offset, find_overlap_ssim
+from app.vision.stitch import stitch_vertical, blend_seam
+
+__all__ = ["frames_are_duplicate", "calc_phash", "calc_ssim",
+           "find_overlap_offset", "find_overlap_ssim",
+           "stitch_vertical", "blend_seam"]
+
+
+================================================================================
+FILE: app/vision/dedup.py
+================================================================================
+"""
+去重模块（pHash + SSIM）
+两层稳定机制第一层：过滤重复帧，防止滚动停滞。
+"""
+
+from PIL import Image
+import numpy as np
+
+try:
+    from imagehash import phash, dhash
+    _HAVE_IMAGEHASH = True
+except ImportError:
+    _HAVE_IMAGEHASH = False
+
+try:
+    from skimage.metrics import structural_similarity as ssim
+    _HAVE_SKIMAGE = True
+except ImportError:
+    _HAVE_SKIMAGE = False
+
+
+def calc_phash(img: Image.Image, hash_size: int = 16) -> "imagehash.ImageHash":
+    """计算感知哈希（pHash）"""
+    if _HAVE_IMAGEHASH:
+        return phash(img, hash_size=hash_size)
+    else:
+        # fallback: 简易 hash
+        import hashlib
+        arr = np.array(img.convert("L").resize((32, 32)))
+        return hashlib.md5(arr.tobytes()).hexdigest()
+
+
+def calc_ssim(img_a: Image.Image, img_b: Image.Image) -> float:
+    """
+    计算结构相似度（SSIM）
+    返回：0~1，1=完全相同
+    """
+    if _HAVE_SKIMAGE:
+        a = np.array(img_a.convert("L"))
+        b = np.array(img_b.convert("L"))
+        if a.shape != b.shape:
+            # resize 到相同尺寸
+            b = np.array(img_b.convert("L").resize(a.shape[::-1]))
+        score = ssim(a, b, data_range=255)
+        return float(score)
+    else:
+        # fallback: MSE
+        a = np.array(img_a.convert("L"), dtype=np.float32)
+        b = np.array(img_b.convert("L").resize(a.shape[::-1]), dtype=np.float32)
+        mse = np.mean((a - b) ** 2)
+        if mse == 0:
+            return 1.0
+        return float(1.0 / (1.0 + mse / 255.0))
+
+
+def frames_are_duplicate(img_a: Image.Image, img_b: Image.Image,
+                        phash_threshold: int = 8,
+                        ssim_threshold: float = 0.92) -> bool:
+    """
+    判断两帧是否重复（两层检测）。
+    返回 True 表示「重复/极相似」，应跳过。
+    """
+    # 第一层：pHash（速度快）
+    if _HAVE_IMAGEHASH:
+        h_a = calc_phash(img_a)
+        h_b = calc_phash(img_b)
+        phash_dist = h_a - h_b
+        if phash_dist <= phash_threshold:
+            # 第二层：SSIM（更准）
+            ssim_score = calc_ssim(img_a, img_b)
+            return ssim_score >= ssim_threshold
+        return False
+    else:
+        # fallback: 只用 SSIM
+        return calc_ssim(img_a, img_b) >= ssim_threshold
+
+
+def hash_distance(img_a: Image.Image, img_b: Image.Image) -> int:
+    """返回两张图的 pHash 汉明距离"""
+    if _HAVE_IMAGEHASH:
+        return int(calc_phash(img_a) - calc_phash(img_b))
+    return 0
+
+
+================================================================================
+FILE: app/vision/align.py
+================================================================================
+"""
+重叠对齐模块（Layer 2 稳定机制）
+上一帧 bottom 区域 vs 下一帧 top 区域
+template matching 找最佳匹配偏移。
+"""
+
+from PIL import Image
+import numpy as np
+
+
+def find_overlap_offset(img_prev: np.ndarray, img_cur: np.ndarray,
+                         search_height: int = 150,
+                         fine_range: int = 20) -> int:
+    """
+    在 img_cur 中搜索与 img_prev 底部最匹配的位置。
+    
+    算法：
+      1. 取 img_prev 底部 search_height 像素（bottom_region）
+      2. 在 img_cur 顶部 0~search_height*2 范围内滑动搜索
+      3. 用 SSD（平方差和）找最佳匹配
+      4. 在粗匹配位置 ±fine_range 内精修
+    
+    返回：img_cur 中重叠起始行号（0=完全无重叠）
+    """
+    ph, pw = img_prev.shape[:2]
+    ch = img_cur.shape[0]
+    
+    # 取 prev 底部区域
+    bottom_h = min(search_height, ph // 2)
+    if bottom_h <= 0:
+        return 0
+    prev_bottom = img_prev[-bottom_h:, :, :]
+    
+    # 搜索范围：cur 的顶部 0~bottom_h*2 行
+    search_max = min(ch, bottom_h * 2)
+    if search_max <= 0:
+        return 0
+    
+    # 粗搜（step=2 加速）
+    best_offset = 0
+    best_ssd = float("inf")
+    
+    for offset in range(0, search_max, 2):
+        cur_slice = img_cur[offset:offset + bottom_h, :, :]
+        sz = min(prev_bottom.shape[0], cur_slice.shape[0])
+        if sz == 0:
+            break
+        # SSD（平方差和）
+        ssd = float(np.sum(
+            (prev_bottom[:sz, :, :].astype(np.int32) - 
+             cur_slice[:sz, :, :].astype(np.int32)) ** 2
+        ))
+        if ssd < best_ssd:
+            best_ssd = ssd
+            best_offset = offset
+    
+    # 精修 ±fine_range
+    fine_start = max(0, best_offset - fine_range)
+    fine_end = min(ch, best_offset + fine_range + 1)
+    for offset in range(fine_start, fine_end):
+        cur_slice = img_cur[offset:offset + bottom_h, :, :]
+        sz = min(prev_bottom.shape[0], cur_slice.shape[0])
+        if sz == 0:
+            break
+        ssd = float(np.sum(
+            (prev_bottom[:sz, :, :].astype(np.int32) - 
+             cur_slice[:sz, :, :].astype(np.int32)) ** 2
+        ))
+        if ssd < best_ssd:
+            best_ssd = ssd
+            best_offset = offset
+    
+    return best_offset
+
+
+def find_overlap_ssim(img_prev: np.ndarray, img_cur: np.ndarray,
+                       search_height: int = 150) -> int:
+    """
+    用 SSIM 找最佳重叠偏移（更准但更慢）。
+    仅当 imagehash + skimage 可用时使用。
+    """
+    try:
+        from skimage.metrics import structural_similarity as ssim
+        ph, pw = img_prev.shape[:2]
+        ch = img_cur.shape[0]
+        bottom_h = min(search_height, ph // 2)
+        if bottom_h <= 0:
+            return 0
+        
+        prev_bottom = img_prev[-bottom_h:, :, :].astype(np.float32)
+        best_offset = 0
+        best_ssim = -1.0
+        
+        for offset in range(0, min(ch, bottom_h * 2)):
+            cur_slice = img_cur[offset:offset + bottom_h, :, :].astype(np.float32)
+            sz = min(prev_bottom.shape[0], cur_slice.shape[0])
+            if sz == 0:
+                break
+            # 转灰度算 SSIM
+            pb_gray = np.mean(prev_bottom[:sz, :, :], axis=2)
+            cs_gray = np.mean(cur_slice[:sz, :, :], axis=2)
+            score = ssim(pb_gray, cs_gray, data_range=255.0)
+            if score > best_ssim:
+                best_ssim = score
+                best_offset = offset
+        
+        return best_offset
+    except Exception:
+        return find_overlap_offset(img_prev, img_cur, search_height)
+
+
+def compute_overlap_region(img_a: Image.Image, img_b: Image.Image,
+                           overlap_px: int = 100) -> float:
+    """
+    计算两张图重叠区域的相似度（0~1）。
+    用于判断是否已到底部。
+    """
+    a = np.array(img_a.convert("RGB"), dtype=np.float32)
+    b = np.array(img_b.convert("RGB").resize((img_a.width, img_a.height)), 
+                  dtype=np.float32)
+    if overlap_px > a.shape[0]:
+        overlap_px = a.shape[0] // 2
+    
+    region_a = a[-overlap_px:, :, :]
+    region_b = b[-overlap_px:, :, :]
+    mse = np.mean((region_a - region_b) ** 2)
+    # 转成相似度
+    if mse == 0:
+        return 1.0
+    return float(1.0 / (1.0 + mse / (255.0 ** 2)))
+
+
+================================================================================
+FILE: app/vision/stitch.py
+================================================================================
+"""
+图像拼接模块（Layer 3 输出）
+使用 align 模块精准定位重叠位置，消除硬切痕迹。
+"""
+
+from PIL import Image
+import numpy as np
+
+from app.vision.dedup import frames_are_duplicate
+from app.vision.align import find_overlap_offset, find_overlap_ssim
+
+
+def stitch_vertical(frames: list, overlap_remove: bool = True,
+                    search_height: int = 150) -> Image.Image:
+    """
+    垂直拼接多帧，自动去除重叠部分。
+    
+    算法：
+      1. 检测并裁剪所有帧顶部相同的固定内容（如浏览器标签栏）
+      2. 逐帧用 SSD/template matching 找最佳重叠偏移
+      3. 只追加新内容部分（消除硬切）
+    
+    参数：
+        frames: PIL Image 列表
+        overlap_remove: 是否自动去除重叠
+        search_height: 重叠搜索高度（像素）
+    
+    返回：拼接后的 PIL Image
+    """
+    if len(frames) == 0:
+        raise ValueError("No frames to stitch")
+    if len(frames) == 1:
+        return frames[0]
+
+    arrays = [np.array(f.convert("RGB")) for f in frames]
+
+    # 检测固定头部（所有帧顶部相同的内容）
+    fixed_h = _detect_fixed_header(arrays, threshold=3.0)
+    if fixed_h > 0:
+        print(f"[Stitch] 检测到固定头部 {fixed_h}px，已自动裁剪")
+
+    # 从第一帧开始拼接
+    result = arrays[0][fixed_h:, :, :]
+
+    for i in range(1, len(arrays)):
+        cur = arrays[i][fixed_h:, :, :]
+
+        if overlap_remove and len(result) > 0:
+            # 用 SSD 找最佳重叠偏移
+            offset = find_overlap_offset(result, cur, search_height=search_height)
+            if offset > 0:
+                # 只追加非重叠部分
+                cur = cur[offset:, :, :]
+                if len(cur) == 0:
+                    continue  # 完全重叠，跳过
+
+        result = np.concatenate([result, cur], axis=0)
+
+    return Image.fromarray(result.astype(np.uint8))
+
+
+def _detect_fixed_header(arrays: list, threshold: float = 3.0) -> int:
+    """
+    逐行扫描检测所有帧顶部相同的固定内容。
+    返回：需要裁剪掉的固定头部高度（像素）
+    """
+    if len(arrays) < 2:
+        return 0
+
+    h = min(a.shape[0] for a in arrays)
+    if h < 10:
+        return 0
+
+    fixed_h = 0
+    ref = arrays[0][:h, :, :]
+
+    for row in range(h - 1):
+        is_fixed = True
+        ref_row = ref[row, :, :]
+
+        for arr in arrays[1:]:
+            if arr.shape[0] <= row:
+                is_fixed = False
+                break
+            cur_row = arr[row, :, :]
+            diff = np.abs(ref_row.astype(np.int16) - cur_row.astype(np.int16))
+            if np.mean(diff) > threshold:
+                is_fixed = False
+                break
+
+        if not is_fixed:
+            break
+        fixed_h = row + 1
+
+    return fixed_h
+
+
+def blend_seam(img_top: np.ndarray, img_bot: np.ndarray,
+                offset: int, blend_px: int = 20) -> np.ndarray:
+    """
+    在拼接处做渐变融合（消除硬切痕迹）。
+    返回融合后的 img_bot（从 offset 开始融合）。
+    """
+    if blend_px <= 0 or offset <= 0:
+        return img_bot
+
+    blend_h = min(blend_px, img_bot.shape[0] - offset)
+    if blend_h <= 0:
+        return img_bot
+
+    # 渐变权重
+    alpha = np.linspace(0, 1, blend_h).reshape(-1, 1, 1)
+
+    top_region = img_top[-blend_h:, :, :].astype(np.float32)
+    bot_region = img_bot[offset:offset + blend_h, :, :].astype(np.float32)
+
+    blended = (1 - alpha) * top_region + alpha * bot_region
+
+    result = img_bot.copy()
+    result[offset:offset + blend_h, :, :] = blended.astype(np.uint8)
+    return result
+
+
+================================================================================
+FILE: app/ocr/__init__.py
+================================================================================
+# app/ocr/__init__.py
+from app.ocr.engine import get_ocr_engine, OCREngine
+from app.ocr.pipeline import pipeline
+
+__all__ = ["get_ocr_engine", "OCREngine", "pipeline"]
+
+
+================================================================================
+FILE: app/ocr/engine.py
+================================================================================
+"""
+OCR 引擎 V2.1 稳定版
+PaddleOCR 单例 + 线程池。
+
+V2.1 修复：
+- 单例模式（只初始化一次）
+- 线程池（不卡 UI）
+- 自动 fallback 到 EasyOCR
+- 黑屏检测（跳过无效输入）
+"""
+
+import time
+import warnings
+from typing import Optional, Dict, List, Any
+from PIL import Image
+import numpy as np
+
+warnings.filterwarnings("ignore")
+
+
+# ── 全局单例 ─────────────────────────────────────────
+_instance: Optional["OCREngine"] = None
+
+
+def get_ocr_engine() -> "OCREngine":
+    """获取 OCR 引擎单例（全局共享）"""
+    global _instance
+    if _instance is None:
+        _instance = OCREngine()
+    return _instance
+
+
+# ── OCR 引擎 ────────────────────────────────────────
+class OCREngine:
+    """
+    OCR 引擎封装（单例）。
+    优先 PaddleOCR，失败 fallback EasyOCR。
+    """
+
+    def __init__(self):
+        self._paddle_ocr = None
+        self._easy_ocr = None
+        self._backend = None
+        self._init_backend()
+
+    def _init_backend(self):
+        """初始化 OCR 后端"""
+        # 1. 尝试 PaddleOCR
+        try:
+            from paddleocr import PaddleOCR
+            # V2.1：不传入已废弃的参数
+            self._paddle_ocr = PaddleOCR(
+                lang="ch",
+            )
+            self._backend = "paddle"
+            print("[OCR] 使用 PaddleOCR 后端")
+            return
+        except Exception as e:
+            print(f"[OCR] PaddleOCR 初始化失败: {e}")
+            print("[OCR] 尝试 fallback 到 easyocr...")
+
+        # 2. Fallback: EasyOCR
+        try:
+            import easyocr
+            self._easy_ocr = easyocr.Reader(
+                ["ch_sim", "en"],
+                gpu=False,
+            )
+            self._backend = "easyocr"
+            print("[OCR] 使用 EasyOCR 后端")
+            return
+        except Exception as e:
+            print(f"[OCR] EasyOCR 初始化失败: {e}")
+
+        self._backend = None
+        print("[OCR] 警告：所有 OCR 后端初始化失败")
+
+    def recognize(
+        self,
+        image: Image.Image,
+        return_json: bool = False,
+    ) -> Dict[str, Any]:
+        """
+        识别图像中的文字。
+        返回：
+        {
+            "text": "识别文本",
+            "boxes": [[x1,y1,x2,y2,x3,y3,x4,y4], ...],
+            "scores": [confidence, ...],
+        }
+        """
+        if self._backend is None:
+            return {"text": "", "boxes": [], "scores": []}
+
+        # 黑屏检测（跳过无效输入）
+        try:
+            arr = np.array(image)
+            if arr.mean() < 15.0:
+                return {"text": "", "boxes": [], "scores": []}
+        except Exception:
+            pass
+
+        # 转 numpy array
+        img_array = np.array(image)
+        if img_array.ndim == 2:
+            img_array = np.stack([img_array] * 3, axis=-1)
+
+        try:
+            if self._backend == "paddle":
+                return self._recognize_paddle(img_array)
+            elif self._backend == "easyocr":
+                return self._recognize_easyocr(img_array)
+        except Exception as e:
+            print(f"[OCR] 识别失败: {e}")
+            return {"text": "", "boxes": [], "scores": []}
+
+    def _recognize_paddle(self, img_array) -> Dict[str, Any]:
+        """PaddleOCR 识别"""
+        result = self._paddle_ocr.ocr(img_array, cls=False)
+        # PaddleOCR 返回格式：[[[box], (text, score)], ...]
+        boxes = []
+        texts = []
+        scores = []
+        if result and len(result) > 0:
+            for line in result[0]:
+                box = line[0]  # [[x1,y1],[x2,y2],[x3,y3],[x4,y4]]
+                text = line[1][0]
+                score = line[1][1]
+                boxes.append([[int(p[0]), int(p[1])] for p in box])
+                texts.append(text)
+                scores.append(float(score))
+        return {
+            "text": "\n".join(texts),
+            "boxes": boxes,
+            "scores": scores,
+        }
+
+    def _recognize_easyocr(self, img_array) -> Dict[str, Any]:
+        """EasyOCR 识别"""
+        result = self._easy_ocr.readtext(img_array)
+        boxes = []
+        texts = []
+        scores = []
+        for box, text, score in result:
+            boxes.append([[int(p[0]), int(p[1])] for p in box])
+            texts.append(text)
+            scores.append(float(score))
+        return {
+            "text": "\n".join(texts),
+            "boxes": boxes,
+            "scores": scores,
+        }
+
+    @property
+    def backend_name(self) -> str:
+        return self._backend or "none"
+
+    def is_ready(self) -> bool:
+        return self._backend is not None
+
+
+================================================================================
+FILE: app/ocr/pipeline.py
+================================================================================
+"""
+OCR 线程池 V2.1 稳定版
+使用 QThread + 线程池，确保 OCR 不阻塞 UI。
+
+V2.1 修复：
+- 单例引擎（只初始化一次）
+- 任务队列（截图 → 队列 → Worker Thread → UI）
+- 非阻塞回调
+- 错误恢复
+"""
+
+import time
+import warnings
+from typing import Optional, Callable, Dict, Any
+from PyQt6.QtCore import QObject, pyqtSignal, QThread, QRunnable, QThreadPool
+from PIL import Image
+
+warnings.filterwarnings("ignore")
+
+from app.ocr.engine import get_ocr_engine
+
+
+# ── OCR Worker（QRunnable）───────────────────────────────
+class OCRWorker(QRunnable):
+    """
+    OCR 工作线程（QRunnable）。
+    在 QThreadPool 中执行，不阻塞 UI。
+    """
+
+    def __init__(
+        self,
+        image: Image.Image,
+        task_id: int,
+        callback: Callable[[int, Dict[str, Any]], None],
+        error_callback: Callable[[int, str], None],
+    ):
+        super().__init__()
+        self._image = image
+        self._task_id = task_id
+        self._callback = callback
+        self._error_callback = error_callback
+
+    def run(self):
+        """执行 OCR 识别"""
+        try:
+            engine = get_ocr_engine()
+            result = engine.recognize(self._image)
+            if self._callback:
+                self._callback(self._task_id, result)
+        except Exception as e:
+            if self._error_callback:
+                self._error_callback(self._task_id, str(e))
+
+
+# ── OCR 任务调度器 ───────────────────────────────────
+class OCRPipeline(QObject):
+    """
+    OCR 任务调度器（单例）。
+    管理任务队列 + 线程池。
+    """
+
+    # 信号
+    result_ready = pyqtSignal(int, dict)  # task_id, result
+    error_occurred = pyqtSignal(int, str)  # task_id, error_msg
+    queue_size_changed = pyqtSignal(int)  # queue_size
+
+    _instance = None
+
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+            cls._instance._initialized = False
+        return cls._instance
+
+    def __init__(self):
+        if self._initialized:
+            return
+        super().__init__()
+        self._thread_pool = QThreadPool.globalThreadpool()
+        self._thread_pool.setMaxThreadCount(2)  # 最多 2 个 OCR 线程
+        self._task_counter = 0
+        self._queue_size = 0
+        self._initialized = True
+        print(f"[OCR Pipeline] 初始化完成，最大线程数：{self._thread_pool.maxThreadCount()}")
+
+    def enqueue(self, image: Image.Image) -> int:
+        """
+        将 OCR 任务加入队列。
+        返回：任务 ID（用于回调识别）
+        """
+        self._task_counter += 1
+        task_id = self._task_counter
+        self._queue_size += 1
+        self.queue_size_changed.emit(self._queue_size)
+
+        worker = OCRWorker(
+            image,
+            task_id,
+            self._on_result,
+            self._on_error,
+        )
+        self._thread_pool.start(worker)
+        return task_id
+
+    def _on_result(self, task_id: int, result: Dict[str, Any]):
+        """OCR 完成回调"""
+        self._queue_size = max(0, self._queue_size - 1)
+        self.queue_size_changed.emit(self._queue_size)
+        self.result_ready.emit(task_id, result)
+
+    def _on_error(self, task_id: int, error_msg: str):
+        """OCR 错误回调"""
+        self._queue_size = max(0, self._queue_size - 1)
+        self.queue_size_changed.emit(self._queue_size)
+        self.error_occurred.emit(task_id, error_msg)
+
+    def clear_queue(self):
+        """清空任务队列"""
+        self._thread_pool.clear()
+        self._queue_size = 0
+        self.queue_size_changed.emit(0)
+
+    def wait_for_done(self, timeout_ms: int = 5000):
+        """等待所有任务完成"""
+        self._thread_pool.waitForDone(timeout_ms)
+
+    @property
+    def queue_size(self) -> int:
+        return self._queue_size
+
+    @property
+    def is_busy(self) -> bool:
+        return self._queue_size > 0
+
+
+# ── 全局单例 ─────────────────────────────────────────
+_pipeline: Optional[OCRPipeline] = None
+
+
+def get_ocr_pipeline() -> OCRPipeline:
+    """获取 OCR 任务调度器单例"""
+    global _pipeline
+    if _pipeline is None:
+        _pipeline = OCRPipeline()
+    return _pipeline
+
+
+================================================================================
+FILE: app/hotkey/__init__.py
+================================================================================
+# app/hotkey/__init__.py
+from app.hotkey.listener import HotkeyListener
+
+__all__ = ["HotkeyListener"]
+
+
+================================================================================
+FILE: app/hotkey/listener.py
+================================================================================
+"""
+全局快捷键模块
+使用 pynput 实现全局热键（不依赖窗口焦点）。
+"""
+
+from pynput import keyboard
+import threading
+
+
+class HotkeyListener:
+    """
+    全局热键监听器（pynput GlobalHotKeys 封装）。
+    支持：
+      register(name, key_combo, callback)
+      start() / stop()
+    """
+
+    def __init__(self):
+        self._bindings = {}
+        self._callbacks = {}
+        self._listener = None
+        self._running = False
+
+    def register(self, name: str, key_combo: str, callback):
+        """
+        注册热键。
+        key_combo 格式（pynput GlobalHotKeys 格式）：
+          "<ctrl>+<shift>+a"
+          "<ctrl>+c"
+          "<esc>"
+        """
+        self._bindings[name] = key_combo
+        self._callbacks[name] = callback
+
+    def unregister(self, name: str):
+        """注销热键"""
+        self._bindings.pop(name, None)
+        self._callbacks.pop(name, None)
+
+    def start(self):
+        """启动监听（后台线程）"""
+        if self._running:
+            return
+        if not self._bindings:
+            print("[Hotkey] 没有注册任何热键")
+            return
+
+        bindings = {
+            combo: self._make_callback(cb)
+            for combo, cb in zip(
+                self._bindings.values(), self._callbacks.values()
+            )
+        }
+
+        try:
+            self._listener = keyboard.GlobalHotKeys(bindings)
+            t = threading.Thread(target=self._listener.run, daemon=True)
+            t.start()
+            self._running = True
+            print(f"[Hotkey] 已启动，监听 {len(bindings)} 个热键")
+        except Exception as e:
+            print(f"[Hotkey] 启动失败: {e}")
+
+    def stop(self):
+        """停止监听"""
+        if self._listener:
+            try:
+                self._listener.stop()
+            except Exception:
+                pass
+        self._running = False
+        print("[Hotkey] 已停止")
+
+    def _make_callback(self, func):
+        """包装回调函数（pynput 要求无参 callable）"""
+        return func
+
+
+================================================================================
+FILE: app/ui/__init__.py
+================================================================================
+# app/ui/__init__.py
+from app.ui.panel import MainWindow
+
+__all__ = ["MainWindow"]
+
+
+================================================================================
+FILE: app/ui/panel.py
+================================================================================
+"""
+主控制面板 V2.1 稳定版
+Snipaste 风格 + 工业级稳定性修复。
+
+V2.1 升级：
+- DPI 感知界面
+- 修饰键状态清理
+- 新截图引擎（dxcam/mss）
+- 新长截图引擎（三层稳定）
+- 新 OCR 线程池（不卡 UI）
+- 设置面板（滚动延迟/滚轮量）
+"""
+
+from PyQt6.QtWidgets import (
+    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
+    QLabel, QPushButton, QTextEdit, QStatusBar, QFileDialog,
+    QGroupBox, QSpinBox, QDoubleSpinBox, QLabel as QL,
+    QProgressBar, QMessageBox, QCheckBox,
+)
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QObject
+from PyQt6.QtGui import QPixmap, QImage, QFont
+from PIL import Image
+import os
+import time
+
+from app.core.event_bus import bus, AppEvent
+from app.core.state_machine import sm, CaptureState
+from app.core.dpi import get_dpi_adapter
+from app.capture.region_capture import RegionSelector
+from app.capture.scroll_capture import ScrollCaptureEngine
+from app.ocr.engine import get_ocr_engine
+from app.ocr.pipeline import get_ocr_pipeline
+from app.utils.key_cleaner import clear_all_modifier_keys, cleanup_after_hotkey
+from app.utils.clipboard import copy_text, copy_image
+from app.utils.image import image_to_bytes
+
+
+class MainWindow(QMainWindow):
+    """主窗口（控制面板）"""
+
+    def __init__(self):
+        super().__init__()
+        self._dpi = get_dpi_adapter()
+        self._current_img = None
+        self._scroll_engine = ScrollCaptureEngine()
+        self._ocr_engine = get_ocr_engine()
+        self._ocr_pipeline = get_ocr_pipeline()
+        self._region_selector = None
+        self._capture_mode = None
+        self._setup_ui()
+        self._connect_events()
+        self._init_ocr()
+
+    def _setup_ui(self):
+        self.setWindowTitle("Screenshot OCR Tool V2.1 Stable")
+        self.setMinimumSize(900, 700)
+        self.setStyleSheet("""
+            QMainWindow { background-color: #1e1e1e; color: #cccccc; }
+            QPushButton {
+                background-color: #2d2d2d;
+                color: #cccccc;
+                border: 1px solid #444;
+                padding: 8px 16px;
+                border-radius: 4px;
+                font-size: 13px;
+            }
+            QPushButton:hover { background-color: #3d3d3d; }
+            QPushButton:pressed { background-color: #1a1a1a; }
+            QPushButton:disabled { color: #666; }
+            QTextEdit {
+                background-color: #252525;
+                color: #cccccc;
+                border: 1px solid #444;
+                font-family: Consolas, monospace;
+                font-size: 13px;
+            }
+            QLabel { color: #cccccc; }
+            QGroupBox {
+                color: #cccccc;
+                border: 1px solid #444;
+                margin-top: 10px;
+            }
+            QGroupBox:title {
+                subcontrol-origin: margin;
+                left: 10px;
+            }
+            QStatusBar { color: #888; }
+        """)
+
+        root = QVBoxLayout()
+        central = QWidget()
+        central.setLayout(root)
+        self.setCentralWidget(central)
+
+        # 按钮栏
+        bar = QHBoxLayout()
+        self.btn_capture = QPushButton("📷 截图")
+        self.btn_long = QPushButton("📜 长截图")
+        self.btn_ocr = QPushButton("🔍 OCR")
+        self.btn_copy = QPushButton("📋 复制文本")
+        self.btn_save = QPushButton("💾 保存图片")
+        self.btn_save_txt = QPushButton("📝 保存文本")
+
+        bar.addWidget(self.btn_capture)
+        bar.addWidget(self.btn_long)
+        bar.addSpacing(20)
+        bar.addWidget(self.btn_ocr)
+        bar.addWidget(self.btn_copy)
+        bar.addWidget(self.btn_save)
+        bar.addWidget(self.btn_save_txt)
+        bar.addStretch()
+        root.addLayout(bar)
+
+        # 截图预览
+        self.preview = QLabel("预览区（截图后显示）")
+        self.preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.preview.setMinimumHeight(350)
+        self.preview.setStyleSheet("""
+            QLabel {
+                background-color: #252525;
+                border: 1px solid #444;
+                color: #666;
+                font-size: 14px;
+            }
+        """)
+        root.addWidget(self.preview)
+
+        # OCR 结果
+        ocr_group = QGroupBox("OCR 结果")
+        ocr_layout = QVBoxLayout()
+        self.ocr_text = QTextEdit()
+        self.ocr_text.setMaximumHeight(200)
+        ocr_layout.addWidget(self.ocr_text)
+        ocr_group.setLayout(ocr_layout)
+        root.addWidget(ocr_group)
+
+        # 设置面板
+        settings_group = QGroupBox("⚙️ 长截图设置")
+        settings_layout = QHBoxLayout()
+
+        settings_layout.addWidget(QL("滚动延迟（秒）:"))
+        self.spin_delay = QDoubleSpinBox()
+        self.spin_delay.setRange(0.1, 3.0)
+        self.spin_delay.setValue(0.35)
+        self.spin_delay.setSingleStep(0.05)
+        self.spin_delay.valueChanged.connect(self._on_delay_changed)
+        settings_layout.addWidget(self.spin_delay)
+
+        settings_layout.addWidget(QL("滚轮量:"))
+        self.spin_wheel = QSpinBox()
+        self.spin_wheel.setRange(-30, -1)
+        self.spin_wheel.setValue(-10)
+        self.spin_wheel.valueChanged.connect(self._on_wheel_changed)
+        settings_layout.addWidget(self.spin_wheel)
+
+        settings_layout.addWidget(QL("最大帧数:"))
+        self.spin_max_frames = QSpinBox()
+        self.spin_max_frames.setRange(20, 500)
+        self.spin_max_frames.setValue(100)
+        settings_layout.addWidget(self.spin_max_frames)
+
+        settings_layout.addStretch()
+        settings_group.setLayout(settings_layout)
+        root.addWidget(settings_group)
+
+        # 状态栏
+        self.status_bar = QStatusBar()
+        self.setStatusBar(self.status_bar)
+        self._update_status("就绪 | Ctrl+Shift+A 截图 | Ctrl+Shift+S 长截图")
+
+    def _connect_events(self):
+        self.btn_capture.clicked.connect(self._on_capture_clicked)
+        self.btn_long.clicked.connect(self._on_long_capture_clicked)
+        self.btn_ocr.clicked.connect(self._on_ocr_clicked)
+        self.btn_copy.clicked.connect(self._on_copy_clicked)
+        self.btn_save.clicked.connect(self._on_save_clicked)
+        self.btn_save_txt.clicked.connect(self._on_save_txt_clicked)
+
+        # OCR 管线信号
+        self._ocr_pipeline.result_ready.connect(self._on_ocr_result)
+        self._ocr_pipeline.error_occurred.connect(self._on_ocr_error)
+
+        # 全局事件
+        bus.subscribe(AppEvent.CAPTURE_DONE, self._on_capture_done)
+        bus.subscribe(AppEvent.OCR_DONE, self._on_ocr_done)
+
+    def _init_ocr(self):
+        if self._ocr_engine.is_ready():
+            self._update_status(f"OCR 引擎就绪（{self._ocr_engine.backend_name}）")
+        else:
+            self._update_status("⚠️ OCR 引擎未就绪")
+
+    def _on_capture_clicked(self):
+        self._start_capture(mode="normal")
+
+    def _on_long_capture_clicked(self):
+        self._start_capture(mode="long")
+
+    def _start_capture(self, mode: str):
+        """启动截图"""
+        # V2.1：清理修饰键状态
+        cleanup_after_hotkey()
+
+        self._capture_mode = mode
+        self._region_selector = RegionSelector()
+        self._region_selector.region_selected.connect(self._on_region_selected)
+        self._region_selector.cancelled.connect(self._on_capture_cancelled)
+        self._region_selector.start()
+
+    def _on_region_selected(self, x: int, y: int, w: int, h: int):
+        """用户完成区域选择"""
+        mode = self._capture_mode
+        self._capture_mode = None
+
+        if mode == "long":
+            # 长截图：主窗口保持隐藏
+            self._update_status("⏳ 长截图中...（请勿操作鼠标键盘）")
+            self.ocr_text.setPlainText("正在长截图，自动滚动中...")
+
+            # 在新线程中执行
+            from PyQt6.QtCore import QThread
+            self._long_thread = QThread()
+            self._scroll_engine.cancel()  # 重置
+
+            # 使用 QTimer 延迟执行（让窗口隐藏完成）
+            QTimer.singleShot(300, lambda: self._do_long_capture(x, y, w, h))
+        else:
+            # 普通截图
+            from PIL import ImageGrab
+            img = ImageGrab.grab(bbox=(x, y, x + w, y + h))
+            self._on_capture_finished(img)
+
+    def _do_long_capture(self, x, y, w, h):
+        """执行长截图（在工作线程中）"""
+        try:
+            self._scroll_engine.capture(
+                x, y, w, h,
+                max_frames=self.spin_max_frames.value(),
+                progress_callback=self._on_scroll_progress,
+                finish_callback=self._on_long_capture_finished,
+                error_callback=self._on_capture_error,
+            )
+        except Exception as e:
+            self._on_capture_error(str(e))
+
+    def _on_scroll_progress(self, cur: int, total: int):
+        """长截图进度回调"""
+        self._update_status(f"⏳ 长截图中... {cur}/{total}")
+
+    def _on_long_capture_finished(self, img: Image.Image):
+        """长截图完成"""
+        self._on_capture_finished(img)
+
+    def _on_capture_finished(self, img: Image.Image):
+        """截图完成"""
+        self._current_img = img
+        self._display_preview(img)
+        self._update_status(f"✅ 截图完成 {img.width}x{img.height}")
+        self.show()
+        self.raise_()
+        self.activateWindow()
+
+    def _display_preview(self, img: Image.Image):
+        """显示预览"""
+        try:
+            from PyQt6.QtGui import QImage
+            if img.mode != "RGB":
+                img = img.convert("RGB")
+            data = img.tobytes("raw", "RGB")
+            qimg = QImage(data, img.width, img.height, QImage.Format.Format_RGB888)
+            pixmap = QPixmap.fromImage(qimg)
+
+            label_size = self.preview.size()
+            scaled = pixmap.scaled(
+                label_size.width(), label_size.height(),
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+            self.preview.setPixmap(scaled)
+        except Exception as e:
+            print(f"[UI] 预览显示失败: {e}")
+
+    def _on_capture_cancelled(self):
+        """截图取消"""
+        self._capture_mode = None
+        self._update_status("取消截图")
+
+    def _on_capture_error(self, msg: str):
+        """截图错误"""
+        self._update_status(f"❌ 错误: {msg}")
+        QMessageBox.critical(self, "错误", msg)
+        self.show()
+
+    def _on_ocr_clicked(self):
+        """执行 OCR"""
+        if self._current_img is None:
+            QMessageBox.warning(self, "警告", "请先截图")
+            return
+
+        if not self._ocr_engine.is_ready():
+            QMessageBox.warning(self, "警告", "OCR 引擎未就绪")
+            return
+
+        self._update_status("⏳ OCR 识别中...")
+        self._ocr_pipeline.enqueue(self._current_img)
+
+    def _on_ocr_result(self, task_id: int, result: dict):
+        """OCR 结果回调"""
+        text = result.get("text", "")
+        self.ocr_text.setPlainText(text)
+        self._update_status(f"✅ OCR 完成，共 {len(text)} 字符")
+
+    def _on_ocr_error(self, task_id: int, error_msg: str):
+        """OCR 错误回调"""
+        self._update_status(f"❌ OCR 错误: {error_msg}")
+
+    def _on_copy_clicked(self):
+        """复制文本到剪贴板"""
+        text = self.ocr_text.toPlainText()
+        if text:
+            copy_text(text)
+            self._update_status("✅ 已复制到剪贴板")
+        else:
+            QMessageBox.warning(self, "警告", "没有可复制的文本")
+
+    def _on_save_clicked(self):
+        """保存图片"""
+        if self._current_img is None:
+            QMessageBox.warning(self, "警告", "请先截图")
+            return
+
+        path, _ = QFileDialog.getSaveFileName(
+            self, "保存图片", "screenshot.png", "PNG (*.png);;JPEG (*.jpg)"
+        )
+        if path:
+            self._current_img.save(path)
+            self._update_status(f"✅ 已保存: {path}")
+
+    def _on_save_txt_clicked(self):
+        """保存文本"""
+        text = self.ocr_text.toPlainText()
+        if not text:
+            QMessageBox.warning(self, "警告", "没有可保存的文本")
+            return
+
+        path, _ = QFileDialog.getSaveFileName(
+            self, "保存文本", "ocr_result.txt", "Text (*.txt)"
+        )
+        if path:
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(text)
+            self._update_status(f"✅ 已保存: {path}")
+
+    def _on_delay_changed(self, value: float):
+        """滚动延迟变更"""
+        self._scroll_engine.set_scroll_delay(value)
+
+    def _on_wheel_changed(self, value: int):
+        """滚轮量变更"""
+        self._scroll_engine.set_wheel_amount(value)
+
+    def _update_status(self, msg: str):
+        """更新状态栏"""
+        self.status_bar.showMessage(msg)
+
+    def closeEvent(self, event):
+        """关闭窗口"""
+        self._scroll_engine.cancel()
+        self._ocr_pipeline.clear_queue()
+        event.accept()
+
+
+================================================================================
+FILE: app/plugins/__init__.py
+================================================================================
+# app/plugins/__init__.py
+from app.plugins.base import PluginBase, PluginManager, plugin_mgr
+
+__all__ = ["PluginBase", "PluginManager", "plugin_mgr"]
+
+
+================================================================================
+FILE: app/plugins/base.py
+================================================================================
+"""
+插件接口（预留扩展）
+未来支持：翻译插件、小说结构分析、AI 摘要、自动分类。
+"""
+
+from abc import ABC, abstractmethod
+from typing import Dict, Any, List
+
+
+class PluginBase(ABC):
+    """
+    插件基类
+    所有插件必须继承此类并实现对应钩子方法。
+    """
+
+    @abstractmethod
+    def name(self) -> str:
+        """插件名称"""
+        pass
+
+    @abstractmethod
+    def version(self) -> str:
+        """插件版本"""
+        pass
+
+    def on_capture(self, img: "Image.Image") -> None:
+        """
+        截图完成后回调。
+        参数：img - 截取的 PIL Image
+        """
+        pass
+
+    def on_ocr(self, text: str, result: Dict) -> None:
+        """
+        OCR 完成后回调。
+        参数：
+            text   - OCR 纯文本结果
+            result - OCR 结构化结果（含 boxes / confidence）
+        """
+        pass
+
+    def on_ui_ready(self, main_window: "MainWindow") -> None:
+        """
+        UI 初始化完成后回调。
+        可在此添加自定义按钮/菜单。
+        """
+        pass
+
+    def cleanup(self) -> None:
+        """插件卸载/退出时清理"""
+        pass
+
+
+class PluginManager:
+    """
+    插件管理器（单例）
+    """
+
+    _instance = None
+
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+            cls._instance._plugins: List[PluginBase] = []
+        return cls._instance
+
+    def register(self, plugin: PluginBase):
+        """注册插件"""
+        self._plugins.append(plugin)
+        print(f"[Plugin] 已注册插件: {plugin.name()} v{plugin.version()}")
+
+    def unregister(self, plugin: PluginBase):
+        """注销插件"""
+        if plugin in self._plugins:
+            plugin.cleanup()
+            self._plugins.remove(plugin)
+
+    def emit_capture(self, img: "Image.Image"):
+        """触发 on_capture 钩子"""
+        for p in self._plugins:
+            try:
+                p.on_capture(img)
+            except Exception as e:
+                print(f"[Plugin] {p.name()}.on_capture 错误: {e}")
+
+    def emit_ocr(self, text: str, result: Dict):
+        """触发 on_ocr 钩子"""
+        for p in self._plugins:
+            try:
+                p.on_ocr(text, result)
+            except Exception as e:
+                print(f"[Plugin] {p.name()}.on_ocr 错误: {e}")
+
+    def emit_ui_ready(self, main_window):
+        """触发 on_ui_ready 钩子"""
+        for p in self._plugins:
+            try:
+                p.on_ui_ready(main_window)
+            except Exception as e:
+                print(f"[Plugin] {p.name()}.on_ui_ready 错误: {e}")
+
+    def list_plugins(self) -> List[str]:
+        """列出所有已注册插件"""
+        return [p.name() for p in self._plugins]
+
+
+# 全局单例
+plugin_mgr = PluginManager()
+
+
+================================================================================
+FILE: app/utils/__init__.py
+================================================================================
+# app/utils/__init__.py
+from app.utils.clipboard import copy_text, copy_image
+
+__all__ = ["copy_text", "copy_image"]
+
+
+================================================================================
+FILE: app/utils/clipboard.py
+================================================================================
+"""
+剪贴板工具
+支持复制文本到系统剪贴板（PyQt6 实现）。
+"""
+
+try:
+    from PyQt6.QtWidgets import QApplication
+    from PyQt6.QtCore import QMimeData
+    _HAVE_QT = True
+except ImportError:
+    _HAVE_QT = False
+
+
+def copy_text(text: str) -> bool:
+    """复制文本到剪贴板"""
+    if not _HAVE_QT:
+        return False
+    try:
+        app = QApplication.instance()
+        if app is None:
+            return False
+        mime = QMimeData()
+        mime.setText(text)
+        app.clipboard().setMimeData(mime)
+        return True
+    except Exception:
+        return False
+
+
+def copy_image(pil_img) -> bool:
+    """复制 PIL Image 到剪贴板"""
+    if not _HAVE_QT:
+        return False
+    try:
+        from PyQt6.QtGui import QImage, QPixmap
+        from PIL.ImageQt import ImageQt
+        app = QApplication.instance()
+        if app is None:
+            return False
+        qimg = ImageQt(pil_img)
+        mime = QMimeData()
+        mime.setImageData(qimg)
+        app.clipboard().setMimeData(mime)
+        return True
+    except Exception:
+        return False
+
+
+================================================================================
+FILE: app/utils/key_cleaner.py
+================================================================================
+"""
+修饰键状态清理器
+解决 pyautogui 操作后 Ctrl/Alt/Shift 状态残留导致屏幕放大等问题。
+
+核心问题：
+- 截图时 Ctrl 被按住 → Windows 放大镜激活（屏幕放大）
+- 滚动时 Alt 被按住 → 窗口拖拽模式激活
+- 必须确保所有修饰键在操作后释放
+"""
+
+import time
+import warnings
+
+warnings.filterwarnings("ignore")
+
+
+# ─── Windows API 方式（最可靠）────────────────────────────
+def clear_modifier_keys_win():
+    """
+    使用 Windows API 释放所有修饰键。
+    最可靠的方式，直接操作底层键盘状态。
+    """
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        # 按键扫描码（Windows API）
+        KEYEVENTF_KEYUP = 0x0002
+        KEYEVENTF_EXTENDEDKEY = 0x0001
+
+        # 修饰键列表（虚拟键码）
+        modifier_keys = [
+            0x10,  # VK_SHIFT
+            0x11,  # VK_CONTROL
+            0x12,  # VK_MENU (Alt)
+            0x5B,  # VK_LWIN (左 Win)
+            0x5C,  # VK_RWIN (右 Win)
+        ]
+
+        for vk in modifier_keys:
+            ctypes.windll.user32.keybd_event(vk, 0, KEYEVENTF_KEYUP, 0)
+
+        time.sleep(0.02)
+        return True
+    except Exception:
+        return False
+
+
+# ─── pyautogui 方式（备用）────────────────────────────────
+def clear_modifier_keys_pyautogui():
+    """
+    使用 pyautogui 释放所有修饰键。
+    作为 Windows API 的备用方案。
+    """
+    try:
+        import pyautogui
+        keys_to_release = ["ctrl", "alt", "shift", "win"]
+        for key in keys_to_release:
+            try:
+                pyautogui.keyUp(key)
+            except Exception:
+                pass
+        time.sleep(0.02)
+        return True
+    except Exception:
+        return False
+
+
+# ─── 组合方式（推荐）────────────────────────────────────
+def clear_all_modifier_keys():
+    """
+    清除所有修饰键状态（组合方式，最可靠）。
+    先尝试 Windows API，失败则 fallback 到 pyautogui。
+    """
+    ok = clear_modifier_keys_win()
+    if not ok:
+        clear_modifier_keys_pyautogui()
+    time.sleep(0.03)
+
+
+# ─── 上下文管理器 ─────────────────────────────────────
+class ModifierKeyContext:
+    """
+    修饰键状态上下文管理器。
+    进入时记录状态，退出时恢复。
+
+    使用方式：
+        with ModifierKeyContext():
+            pyautogui.press("pagedown")
+    """
+
+    def __enter__(self):
+        # 进入前清除所有修饰键状态
+        clear_all_modifier_keys()
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        # 退出后再次清除（防止操作过程中残留）
+        clear_all_modifier_keys()
+        return False
+
+
+# ─── 滚动前准备 ───────────────────────────────────────
+def prepare_for_scroll():
+    """
+    滚动前准备（清除修饰键 + 等待稳定）。
+    必须在每次滚动操作前调用。
+    """
+    clear_all_modifier_keys()
+    time.sleep(0.05)
+
+
+def prepare_for_capture():
+    """
+    截图前准备（清除修饰键 + 等待渲染）。
+    必须在每次截图操作前调用。
+    """
+    clear_all_modifier_keys()
+    time.sleep(0.08)
+
+
+# ─── 全局快捷键后清理 ─────────────────────────────────
+def cleanup_after_hotkey():
+    """
+    全局快捷键触发后清理。
+    防止快捷键本身（Ctrl+Shift+A）的按键状态残留。
+    """
+    time.sleep(0.1)
+    clear_all_modifier_keys()
+
+
+================================================================================
+END OF CODE.TXT
+================================================================================
