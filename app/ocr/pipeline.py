@@ -76,7 +76,7 @@ class OCRPipeline(QObject):
         if self._initialized:
             return
         super().__init__()
-        self._thread_pool = QThreadPool.globalThreadpool()
+        self._thread_pool = QThreadPool.globalInstance()
         self._thread_pool.setMaxThreadCount(2)  # 最多 2 个 OCR 线程
         self._task_counter = 0
         self._queue_size = 0
