@@ -16,6 +16,11 @@ from PIL import Image
 warnings.filterwarnings("ignore")
 
 
+# ─── 日志 ─────────────────────────────────
+from app.utils.logger import get_logger
+logger = get_logger(__name__)
+
+
 # ─── 黑屏检测 ─────────────────────────────────────────────
 def is_black_screen(img: Image.Image, threshold: float = 0.98) -> bool:
     """
@@ -81,7 +86,7 @@ class ScreenGrabber:
             self._dxcam = dxcam.create(output_color="BGR")
             if self._dxcam is not None:
                 self._backend = "dxcam"
-                print("[Grabber] 使用 dxcam 后端（GPU 加速）")
+                logger.info("使用 dxcam 后端（GPU 加速）")
                 return
         except Exception:
             pass
@@ -91,14 +96,14 @@ class ScreenGrabber:
             import mss
             self._mss = mss.mss()
             self._backend = "mss"
-            print("[Grabber] 使用 mss 后端")
+            logger.info("使用 mss 后端")
             return
         except Exception:
             pass
 
         # 3. fallback: PIL
         self._backend = "pil"
-        print("[Grabber] 使用 PIL 后端（性能较低）")
+        logger.warning("使用 PIL 后端（性能较低）")
 
     def grab(
         self,
