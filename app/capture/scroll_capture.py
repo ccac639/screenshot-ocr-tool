@@ -22,9 +22,9 @@ from app.core.state_machine import sm, CaptureState
 from app.core.dpi import get_dpi_adapter
 from app.capture.screen_grabber import grabber
 from app.utils.key_cleaner import clear_all_modifier_keys, prepare_for_scroll, prepare_for_capture
-from app.vision.dedup import is_duplicate_phash, is_duplicate_ssim
+from app.vision.dedup import frames_are_duplicate
 from app.vision.align import find_overlap_offset
-from app.vision.stitch import stitch_frames_v2
+from app.vision.stitch import stitch_vertical
 
 
 # ─── 滚动稳定控制器 ─────────────────────────────────────
@@ -173,7 +173,7 @@ class ScrollCaptureEngine:
 
             # 拼接
             sm.transition(CaptureState.STITCHING)
-            result = stitch_frames_v2(self._frames)
+            result = stitch_vertical(self._frames)
 
             sm.transition(CaptureState.DONE)
             if finish_callback:
@@ -206,11 +206,8 @@ class ScrollCaptureEngine:
         if len(self._frames) < 1:
             return False
         prev = self._frames[-1]
-        # pHash 去重
-        if is_duplicate_phash(prev, frame, threshold=8):
-            return True
-        # SSIM 去重
-        if is_duplicate_ssim(prev, frame, threshold=0.96):
+        # 使用 frames_are_duplicate 进行两层检测（pHash + SSIM）
+        if frames_are_duplicate(prev, frame, phash_threshold=8, ssim_threshold=0.96):
             return True
         return False
 

@@ -208,3 +208,7 @@ class ScreenGrabber:
         self._mss = None
         self._dxcam = None
         self._init_backend()
+
+
+# ─── 全局单例 ─────────────────────────────────────────
+grabber = ScreenGrabber()
