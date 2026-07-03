@@ -1593,3 +1593,7 @@ def stitch_frames(frames: List[np.ndarray]) -> np.ndarray:
         numpy.ndarray: 拼接后的图像
     """
     return stitch_vertical(frames)
+
+==========================================
+更新时间: Fri Jul  3 15:39:00     2026
+==========================================
