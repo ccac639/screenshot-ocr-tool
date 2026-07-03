@@ -1,47 +1,9 @@
-==========================================
-Screenshot OCR Tool V2.1 - 完整源代码
-==========================================
+=== Screenshot OCR Tool V2.1 - 完整源代码 ===
+
 项目：Python桌面截图+OCR工具
 版本：V2.1
-架构：事件驱动（简化版）
 日期：2026-07-03
 作者：User
-
-==========================================
-目录结构
-==========================================
-
-app/
-├── __init__.py
-├── main.py                  # 启动入口
-├── core/
-│    ├── __init__.py
-│    ├── events.py          # 事件定义
-│    └── event_bus.py       # 事件总线
-├── capture/
-│    ├── __init__.py
-│    ├── grabber.py         # 截图引擎
-│    ├── region.py          # 区域截图
-│    └── scroll.py          # 长截图
-├── ocr/
-│    ├── __init__.py
-│    ├── engine.py          # OCR引擎
-│    └── worker.py          # OCR工作线程
-├── ui/
-│    ├── __init__.py
-│    ├── overlay.py         # 选区UI
-│    └── panel.py           # 控制面板
-├── hotkey/
-│    ├── __init__.py
-│    └── listener.py        # 快捷键监听
-├── utils/
-│    ├── __init__.py
-│    ├── clipboard.py       # 剪贴板操作
-│    └── logger.py         # 日志系统
-└── vision/
-    ├── __init__.py
-    ├── stitch.py          # 图像拼接
-    └── dedup.py          # 图像去重
 
 ==========================================
 
@@ -549,18 +511,19 @@ class HotkeyListener:
         # 构建按键绑定
         bindings = {}
         for name, combo in self._bindings.items():
-            callbacks = self._callbacks[name]
-            bindings[combo] = self._make_callback(callbacks)
+            callback = self._callbacks[name]
+            bindings[combo] = self._make_callback(callback)
         
         try:
             # 启动全局快捷键监听
+            print(f"[Hotkey] 正在启动，注册了 {len(bindings)} 个热键: {list(bindings.keys())}")
             self._listener = keyboard.GlobalHotKeys(bindings)
             t = threading.Thread(target=self._listener.run, daemon=True)
             t.start()
             self._running = True
-            print(f"[Hotkey] 已启动，监听 {len(bindings)} 个热键")
+            print(f"[Hotkey] ✅ 已启动，监听线程ID: {t.ident}")
         except Exception as e:
-            print(f"[Hotkey] 启动失败: {e}")
+            print(f"[Hotkey] ❌ 启动失败: {e}")
     
     def stop(self):
         """停止监听"""
@@ -884,19 +847,27 @@ File: app/ui/overlay.py
 
 from typing import Callable, Optional, Tuple
 from PyQt6.QtWidgets import QWidget, QApplication
-from PyQt6.QtCore import Qt, QRect
+from PyQt6.QtCore import Qt, QRect, QTimer, pyqtSignal
 from PyQt6.QtGui import QPainter, QColor, QPen, QScreen
+
+import logging
+_logger = logging.getLogger(__name__)
 
 
 class RegionSelector(QWidget):
     """
-    区域选择器
+    区域选择器 V2.1
     
     用法：
         selector = RegionSelector()
         selector.region_selected.connect(callback)
         selector.start()
     """
+    # ✅ 正确：信号定义为类属性
+    region_selected = pyqtSignal(int, int, int, int)
+    
+    def __init__(self):
+        super().__init__()
     
     def __init__(self):
         super().__init__()
@@ -904,91 +875,105 @@ class RegionSelector(QWidget):
         self._end_pos = None
         self._selecting = False
         
-        self._init_ui()
-    
-    def _init_ui(self):
-        """初始化 UI"""
-        # 全屏透明窗口
+        # ✅ 动态添加信号
+        from PyQt6.QtCore import pyqtSignal
+        self.region_selected = pyqtSignal(int, int, int, int)
+        
+        _logger.info("[Overlay] 初始化区域选择器...")
+        
+        # ✅ 简化窗口标志（去掉 Tool 标志）
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint |
-            Qt.WindowType.WindowStaysOnTopHint |
-            Qt.WindowType.Tool
+            Qt.WindowType.WindowStaysOnTopHint
+            # ❌ 去掉 Qt.WindowType.Tool（可能导致不显示）
         )
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         
-        # 获取屏幕尺寸
-        screen = QApplication.primaryScreen()
-        geometry = screen.geometry()
-        self.setGeometry(geometry)
+        # ✅ 不使用透明背景（改为在paintEvent中绘制半透明遮罩）
+        # self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         
+        self.setCursor(Qt.CursorShape.CrossCursor)
+        
+        # ✅ 获取所有屏幕的整体尺寸
+        screens = QApplication.screens()
+        total_geometry = QRect(0, 0, 0, 0)
+        for screen in screens:
+            geo = screen.geometry()
+            total_geometry = total_geometry.united(geo)
+        
+        self.setGeometry(total_geometry)
+        _logger.info(f"[Overlay] 屏幕尺寸: {total_geometry.width()}x{total_geometry.height()}")
+        
+        # ✅ 设置样式（调试用：红色边框）
+        self.setStyleSheet("border: 3px solid red;")
+        
+    def showEvent(self, event):
+        """窗口显示事件"""
+        _logger.info("[Overlay] showEvent 触发！")
+        # ✅ 确保全屏和置顶
         self.showFullScreen()
-    
+        self.activateWindow()
+        self.raise_()
+        _logger.info("[Overlay] ✅ 窗口已强制置顶并显示")
+        super().showEvent(event)
+        
     def mousePressEvent(self, event):
-        """鼠标按下"""
-        self._start_pos = event.position().toPoint()
-        self._end_pos = self._start_pos
-        self._selecting = True
-        self.update()
-    
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._start_pos = event.position().toPoint()
+            self._end_pos = self._start_pos
+            self._selecting = True
+            self.update()
+            _logger.info(f"[Overlay] 开始选择: {self._start_pos}")
+            
     def mouseMoveEvent(self, event):
-        """鼠标移动"""
         if self._selecting:
             self._end_pos = event.position().toPoint()
             self.update()
-    
+            
     def mouseReleaseEvent(self, event):
-        """鼠标释放"""
-        if self._selecting:
+        if self._selecting and event.button() == Qt.MouseButton.LeftButton:
             self._selecting = False
-            self._emit_region()
+            rect = self._get_rect()
+            _logger.info(f"[Overlay] 选择完成: {rect.x()}, {rect.y()}, {rect.width()}x{rect.height()}")
+            if rect.width() > 10 and rect.height() > 10:
+                self.region_selected.emit(rect.x(), rect.y(), rect.width(), rect.height())
+            else:
+                _logger.warning("[Overlay] 选择区域太小，忽略")
             self.close()
-    
+            
     def keyPressEvent(self, event):
-        """按键事件"""
         if event.key() == Qt.Key.Key_Escape:
+            _logger.info("[Overlay] 用户按 Esc 取消")
             self.close()
-    
+            
     def paintEvent(self, event):
-        """绘制选择区域"""
         if not self._selecting or not self._start_pos or not self._end_pos:
+            # ✅ 即使没在选择，也绘制遮罩（让用户知道窗口已显示）
+            painter = QPainter(self)
+            painter.fillRect(self.rect(), QColor(0, 0, 0, 120))  # 半透明黑色遮罩
+            painter.drawText(50, 50, "请拖拽选择区域 (按Esc取消)")
             return
-        
+            
+        from PyQt6.QtGui import QPainter, QColor, QPen
         painter = QPainter(self)
-        
-        # 绘制半透明遮罩
-        painter.fillRect(self.rect(), QColor(0, 0, 0, 100))
-        
-        # 绘制选择区域
+        # ✅ 增加不透明度，让用户能看到遮罩
+        painter.fillRect(self.rect(), QColor(0, 0, 0, 180))
+
         rect = self._get_rect()
-        painter.fillRect(rect, QColor(255, 255, 255, 50))
-        
-        # 绘制边框
-        pen = QPen(QColor(255, 0, 0), 2)
+        painter.fillRect(rect, QColor(255, 255, 255, 80))
+        # ✅ 更明显的边框
+        pen = QPen(QColor(255, 0, 0), 3, Qt.PenStyle.SolidLine)  # 红色实线，3px
         painter.setPen(pen)
         painter.drawRect(rect)
+        painter.drawText(rect.x(), rect.y() - 8, f"{rect.width()} x {rect.height()}")
         
-        # 绘制尺寸信息
-        painter.drawText(rect.x(), rect.y() - 10, f"{rect.width()} x {rect.height()}")
-    
-    def _get_rect(self) -> QRect:
-        """获取选择区域"""
+    def _get_rect(self):
         x = min(self._start_pos.x(), self._end_pos.x())
         y = min(self._start_pos.y(), self._end_pos.y())
         w = abs(self._end_pos.x() - self._start_pos.x())
         h = abs(self._end_pos.y() - self._start_pos.y())
+        from PyQt6.QtCore import QRect
         return QRect(x, y, w, h)
-    
-    def _emit_region(self):
-        """发射区域选择信号"""
-        rect = self._get_rect()
-        if rect.width() > 10 and rect.height() > 10:
-            region = (rect.x(), rect.y(), rect.width(), rect.height())
-            if hasattr(self, 'region_selected'):
-                self.region_selected.emit(region[0], region[1], region[2], region[3])
-    
-    def start(self):
-        """开始选择"""
-        self.show()
+        
 
 ==========================================
 File: app/ui/panel.py
@@ -1000,6 +985,7 @@ File: app/ui/panel.py
 - 直接驱动底层组件，不再只是发射空事件
 """
 
+import logging
 from typing import Any, Optional, Tuple
 import numpy as np
 from PyQt6.QtWidgets import (
@@ -1015,6 +1001,9 @@ from app.capture.region import RegionCapture
 from app.capture.scroll import ScrollCapture
 from app.ocr.worker import OCRWorker
 from app.utils.clipboard import copy_image_to_clipboard
+from app.utils.logger import get_logger
+
+_logger = get_logger(__name__)
 
 
 class _RegionSelector(QWidget):
@@ -1031,6 +1020,8 @@ class _RegionSelector(QWidget):
         self._end_pos = None
         self._selecting = False
 
+        _logger.info("[Overlay] 初始化区域选择器...")
+
         # 全屏透明窗口
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint |
@@ -1038,10 +1029,12 @@ class _RegionSelector(QWidget):
             Qt.WindowType.Tool
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setCursor(Qt.CursorShape.CrossCursor)
 
         screen = QApplication.primaryScreen()
         geometry = screen.geometry()
         self.setGeometry(geometry)
+        _logger.info(f"[Overlay] 屏幕尺寸: {geometry.width()}x{geometry.height()}")
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
@@ -1049,6 +1042,7 @@ class _RegionSelector(QWidget):
             self._end_pos = self._start_pos
             self._selecting = True
             self.update()
+            _logger.info(f"[Overlay] 开始选择: {self._start_pos}")
 
     def mouseMoveEvent(self, event):
         if self._selecting:
@@ -1059,12 +1053,16 @@ class _RegionSelector(QWidget):
         if self._selecting and event.button() == Qt.MouseButton.LeftButton:
             self._selecting = False
             rect = self._get_rect()
+            _logger.info(f"[Overlay] 选择完成: {rect.x()}, {rect.y()}, {rect.width()}x{rect.height()}")
             if rect.width() > 10 and rect.height() > 10:
                 self.region_selected.emit(rect.x(), rect.y(), rect.width(), rect.height())
+            else:
+                _logger.warning("[Overlay] 选择区域太小，忽略")
             self.close()
 
     def keyPressEvent(self, event):
         if event.key() == Qt.Key.Key_Escape:
+            _logger.info("[Overlay] 用户按 Esc 取消")
             self.close()
 
     def paintEvent(self, event):
@@ -1073,11 +1071,13 @@ class _RegionSelector(QWidget):
 
         from PyQt6.QtGui import QPainter, QColor, QPen
         painter = QPainter(self)
-        painter.fillRect(self.rect(), QColor(0, 0, 0, 100))
+        # ✅ 增加不透明度，让用户能看到遮罩
+        painter.fillRect(self.rect(), QColor(0, 0, 0, 180))  # 从100改为180
 
         rect = self._get_rect()
-        painter.fillRect(rect, QColor(255, 255, 255, 50))
-        pen = QPen(QColor(0, 180, 255), 2, Qt.PenStyle.DashLine)
+        painter.fillRect(rect, QColor(255, 255, 255, 80))  # 从50改为80
+        # ✅ 更明显的边框
+        pen = QPen(QColor(255, 0, 0), 3, Qt.PenStyle.SolidLine)  # 红色实线，3px
         painter.setPen(pen)
         painter.drawRect(rect)
         painter.drawText(rect.x(), rect.y() - 8, f"{rect.width()} x {rect.height()}")
@@ -1120,6 +1120,7 @@ class Panel(QMainWindow):
         bus.subscribe(EventType.OCR_ERROR, self._on_ocr_error)
 
         self._init_ui()
+        _logger.info("[UI] Panel 初始化完成")
 
     # ─── UI 初始化 ──────────────────────────────
 
@@ -1140,31 +1141,30 @@ class Panel(QMainWindow):
         layout.addWidget(title)
 
         # 截图按钮
-        self._btn_capture = QPushButton("\U0001F4F7  截图 (Ctrl+Shift+A)")
+        self._btn_capture = QPushButton("📸  截图 (Ctrl+Shift+A)")
         self._btn_capture.clicked.connect(self._on_capture_clicked)
         self._btn_capture.setMinimumHeight(40)
         layout.addWidget(self._btn_capture)
 
         # 长截图按钮
-        self._btn_scroll = QPushButton("\U0001F4DD  长截图 (Ctrl+Shift+S)")
+        self._btn_scroll = QPushButton("📝  长截图 (Ctrl+Shift+S)")
         self._btn_scroll.clicked.connect(self._on_scroll_clicked)
         self._btn_scroll.setMinimumHeight(40)
         layout.addWidget(self._btn_scroll)
 
         # OCR 按钮
-        self._btn_ocr = QPushButton("\U0001F50D  OCR 识别 (Ctrl+Shift+O)")
+        self._btn_ocr = QPushButton("🔍  OCR 识别 (Ctrl+Shift+O)")
         self._btn_ocr.clicked.connect(self._on_ocr_clicked)
         self._btn_ocr.setMinimumHeight(40)
         layout.addWidget(self._btn_ocr)
 
         # 状态标签
-        self._status_label = QLabel("\u2705 就绪")
+        self._status_label = QLabel("✅ 就绪")
         self._status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._status_label.setStyleSheet("color: #666; font-size: 13px; margin-top: 12px;")
         layout.addWidget(self._status_label)
 
-        # 禁用状态时的提示
-        self._set_buttons_enabled(True)
+        _logger.info("[UI] UI 组件创建完成")
 
     def _set_buttons_enabled(self, enabled: bool):
         for btn in [self._btn_capture, self._btn_scroll, self._btn_ocr]:
@@ -1176,16 +1176,30 @@ class Panel(QMainWindow):
 
     def _on_capture_clicked(self):
         """截图按钮 → 显示区域选择器"""
-        self._status_label.setText("\u23F3 截图模式中... 请拖拽选择区域")
+        _logger.info("[UI] 🔥 截图按钮被点击！")
+        self._status_label.setText("📸 截图模式中... 请拖拽选择区域")
         self._set_buttons_enabled(False)
 
-        self._selector = _RegionSelector()
-        self._selector.region_selected.connect(self._on_region_selected)
-        self._selector.showFullScreen()
+        try:
+            _logger.info("[UI] 创建区域选择器...")
+            self._selector = _RegionSelector()
+            self._selector.region_selected.connect(self._on_region_selected)
+            _logger.info("[UI] 调用 showFullScreen()...")
+            self._selector.showFullScreen()  # ✅ 使用 showFullScreen()
+            self._selector.activateWindow()  # ✅ 激活窗口
+            self._selector.raise_()  # ✅ 置顶
+            _logger.info("[UI] ✅ 区域选择器已显示")
+        except Exception as e:
+            _logger.error(f"[UI] ❌ 创建区域选择器失败: {e}")
+            import traceback
+            _logger.error(traceback.format_exc())
+            self._status_label.setText(f"❌ 截图失败: {e}")
+            self._set_buttons_enabled(True)
 
     def _on_region_selected(self, x: int, y: int, w: int, h: int):
         """区域选择完成 → 执行截图"""
-        self._status_label.setText("\u23F3 正在截取屏幕...")
+        _logger.info(f"[UI] 区域选择完成: {x}, {y}, {w}x{h}")
+        self._status_label.setText("⏳ 正在截取屏幕...")
         QApplication.processEvents()
 
         try:
@@ -1195,38 +1209,44 @@ class Panel(QMainWindow):
 
             # 自动复制到剪贴板
             copy_image_to_clipboard(img)
-            self._status_label.setText(f"\u2705 截图完成 ({w}x{h}) 已复制到剪贴板")
+            self._status_label.setText(f"✅ 截图完成 ({w}x{h}) 已复制到剪贴板")
+            _logger.info(f"[UI] ✅ 截图完成: {w}x{h}")
         except Exception as e:
-            self._status_label.setText(f"\u274C 截图失败: {e}")
-            print(f"[Panel] Capture error: {e}")
+            self._status_label.setText(f"❌ 截图失败: {e}")
+            _logger.error(f"[UI] ❌ 截图失败: {e}")
+            import traceback
+            _logger.error(traceback.format_exc())
         finally:
             self._set_buttons_enabled(True)
 
     def _on_scroll_clicked(self):
         """长截图按钮"""
-        self._status_label.setText("\u23F3 长截图中...")
+        _logger.info("[UI] 长截图按钮被点击")
+        self._status_label.setText("⏳ 长截图中...")
         self._set_buttons_enabled(False)
 
         # TODO: 实现长截图流程（需要滚动捕获）
         # 先用简单方案：显示区域选择器后自动开始滚动
-        self._status_label.setText("\u26A0\uFE0F 长截图功能开发中...")
+        self._status_label.setText("⚠️ 长截图功能开发中...")
         self._set_buttons_enabled(True)
 
     def _on_ocr_clicked(self):
         """OCR 按钮 → 如果有截图就识别，否则先截图再识别"""
+        _logger.info("[UI] OCR 按钮被点击")
         if self._last_captured_image is not None:
             self._do_ocr(self._last_captured_image)
         else:
             # 没有缓存截图，先截图
-            self._status_label.setText("\u23F3 请先截图或等待 OCR...")
+            self._status_label.setText("⏳ 请先截图或等待 OCR...")
             self._pending_ocr = True
             self._on_capture_clicked()
 
     def _do_ocr(self, image: np.ndarray):
         """执行 OCR 识别"""
-        self._status_label.setText("\u23F3 OCR 识别中...")
+        self._status_label.setText("⏳ OCR 识别中...")
         self._set_buttons_enabled(False)
         self._ocr_worker.run(image)
+        _logger.info("[UI] OCR 任务已提交")
 
     # ════════════════════════════════════════════
     #   事件回调
@@ -1234,7 +1254,7 @@ class Panel(QMainWindow):
 
     def _on_capture_done(self, data: Any):
         """截图完成"""
-        print("[UI] \u2705 Capture done")
+        _logger.info("[UI] ✅ Capture done")
         # 如果有 pending 的 OCR，自动触发
         if hasattr(self, '_pending_ocr') and self._pending_ocr:
             self._pending_ocr = False
@@ -1247,26 +1267,27 @@ class Panel(QMainWindow):
         if data and "result" in data:
             result = data["result"]
             text = self._extract_text(result)
-            self._status_label.setText(f"\u2705 OCR 完成 ({len(result)} 个结果)")
+            self._status_label.setText(f"✅ OCR 完成 ({len(result)} 个结果)")
+            _logger.info(f"[UI] ✅ OCR 完成: {len(result)} 个结果")
 
             # 显示结果对话框
             msg = QMessageBox(self)
-            msg.setWindowTitle("\u2705 OCR 识别结果")
+            msg.setWindowTitle("✅ OCR 识别结果")
             msg.setIcon(QMessageBox.Icon.Information)
             msg.setText(f"识别到 **{len(result)}** 个文本区域：")
             msg.setDetailedText(text[:2000] if text else "(无内容)")
             msg.exec()
         else:
-            self._status_label.setText("\u2705 OCR 完成")
-        print("[UI] OCR done:", data)
+            self._status_label.setText("✅ OCR 完成")
+        _logger.info(f"[UI] OCR done: {data}")
 
     def _on_ocr_error(self, data: Any):
         """OCR 错误"""
         self._set_buttons_enabled(True)
         err_msg = data.get("error", "未知错误") if data else "未知错误"
-        self._status_label.setText(f"\u274C OCR 失败: {err_msg}")
-        QMessageBox.critical(self, "\u274C OCR 错误", f"OCR 识别失败:\n{err_msg}")
-        print("[UI] OCR error:", err_msg)
+        self._status_label.setText(f"❌ OCR 失败: {err_msg}")
+        _logger.error(f"[UI] OCR error: {err_msg}")
+        QMessageBox.critical(self, "❌ OCR 错误", f"OCR 识别失败:\n{err_msg}")
 
     @staticmethod
     def _extract_text(result) -> str:
@@ -1287,16 +1308,19 @@ class Panel(QMainWindow):
 
 def on_hotkey_capture(panel: 'Panel'):
     """Ctrl+Shift+A 快捷键回调"""
+    _logger.info("[Hotkey] Ctrl+Shift+A 触发")
     panel._on_capture_clicked()
 
 
 def on_hotkey_long_capture(panel: 'Panel'):
     """Ctrl+Shift+S 快捷键回调"""
+    _logger.info("[Hotkey] Ctrl+Shift+S 触发")
     panel._on_scroll_clicked()
 
 
 def on_hotkey_ocr(panel: 'Panel'):
     """Ctrl+Shift+O 快捷键回调"""
+    _logger.info("[Hotkey] Ctrl+Shift+O 触发")
     panel._on_ocr_clicked()
 
 ==========================================
@@ -1594,6 +1618,3 @@ def stitch_frames(frames: List[np.ndarray]) -> np.ndarray:
     """
     return stitch_vertical(frames)
 
-==========================================
-更新时间: Fri Jul  3 15:39:00     2026
-==========================================
